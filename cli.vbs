@@ -198,45 +198,64 @@ End Sub
 ' Función para abrir Access de forma segura
 ' Función canónica para abrir Access (basada en condor_cli.vbs)
 Function OpenAccess(dbPath, password)
-    Dim objApp
+    Dim objAccess
     
-    LogVerbose "Abriendo Access: " & dbPath
-    If password <> "" Then
-        LogVerbose "Con password: (oculta)"
+    If gVerbose Then
+        WScript.Echo "[VERBOSE] Abriendo Access: " & dbPath
+        If password <> "" Then
+            WScript.Echo "[VERBOSE] Con password: (oculta)"
+        End If
     End If
     
     On Error Resume Next
-    Set objApp = CreateObject("Access.Application")
+    Set objAccess = CreateObject("Access.Application")
     
     If Err.Number <> 0 Then
-        LogMessage "ERROR: No se pudo crear instancia de Access: " & Err.Description
+        WScript.Echo "ERROR: No se pudo crear instancia de Access: " & Err.Description
         Set OpenAccess = Nothing
         Exit Function
     End If
     
     ' Configurar Access para modo silencioso
-    objApp.Visible = False
-    objApp.UserControl = False
+    objAccess.Visible = False
+    objAccess.UserControl = False
     
     ' Abrir la base de datos
     If password <> "" Then
-        objApp.OpenCurrentDatabase dbPath, False, password
+        objAccess.OpenCurrentDatabase dbPath, False, password
     Else
-        objApp.OpenCurrentDatabase dbPath, False
+        objAccess.OpenCurrentDatabase dbPath, False
     End If
     
     If Err.Number <> 0 Then
-        LogMessage "ERROR: No se pudo abrir la base de datos: " & Err.Description
-        objApp.Quit
-        Set objApp = Nothing
+        WScript.Echo "ERROR: No se pudo abrir la base de datos: " & Err.Description
+        objAccess.Quit
+        Set objAccess = Nothing
         Set OpenAccess = Nothing
         Exit Function
     End If
     
     On Error GoTo 0
-    Set OpenAccess = objApp
+    Set OpenAccess = objAccess
     
-    LogVerbose "Access abierto exitosamente"
+    If gVerbose Then
+        ' Verificar si VBE está disponible
+        Dim vbeAvailable
+        vbeAvailable = False
+        On Error Resume Next
+        If Not objAccess.VBE Is Nothing Then
+            vbeAvailable = True
+        End If
+        On Error GoTo 0
+        
+        If vbeAvailable Then
+            WScript.Echo "[VERBOSE] Acceso VBE disponible"
+        Else
+            WScript.Echo "[VERBOSE] Acceso VBE NO disponible"
+        End If
+        
+        WScript.Echo "[VERBOSE] Access abierto exitosamente"
+    End If
 End Function
 
 ' Función canónica para cerrar Access de forma segura (basada en condor_cli.vbs)
@@ -1059,7 +1078,6 @@ Function RebuildModules(dbPath)
             If moduleContent <> "" Then
                 ' Importar o actualizar modulo en Access
                 If ImportModuleToAccess(moduleName, moduleContent, moduleFile) Then
-                    LogMessage "Modulo " & moduleName & " importado correctamente"
                 Else
                     LogMessage "Error importando modulo: " & moduleName
                 End If
@@ -1144,7 +1162,6 @@ Function UpdateModules(dbPath)
                 If moduleContent <> "" Then
                     ' Importar o actualizar modulo en Access
                     If ImportModuleToAccess(moduleName, moduleContent, moduleFile) Then
-                        LogMessage "Modulo " & moduleName & " actualizado correctamente"
                     Else
                         LogMessage "Error actualizando modulo: " & moduleName
                     End If
@@ -1279,15 +1296,18 @@ Function ImportModuleToAccess(moduleName, moduleContent, filePath)
     
     ' Intentar eliminar modulo existente
     DeleteExistingModule moduleName, moduleType
+    If Err.Number <> 0 Then
+        LogMessage "Advertencia eliminando modulo existente " & moduleName & ": " & Err.Description
+        Err.Clear ' Continuar aunque no se pueda eliminar
+    End If
     
     ' Importar nuevo modulo usando VBE
-    ImportVBAModule moduleName, moduleContent, moduleType
-    
-    If Err.Number = 0 Then
+    If ImportVBAModuleSafe(moduleName, moduleContent, moduleType) Then
         ImportModuleToAccess = True
+        LogMessage "Modulo " & moduleName & " importado exitosamente"
     Else
-        LogMessage "Error importando modulo " & moduleName & ": " & Err.Description
-        Err.Clear
+        LogMessage "Error importando modulo " & moduleName
+        ImportModuleToAccess = False
     End If
 End Function
 
@@ -1304,50 +1324,195 @@ Sub DeleteExistingModule(moduleName, moduleType)
     Err.Clear ' Ignorar errores si el modulo no existe
 End Sub
 
-' Función para importar modulo VBA
+' Función para importar modulo VBA con manejo robusto de errores
+Function ImportVBAModuleSafe(moduleName, moduleContent, moduleType)
+    On Error Resume Next
+    
+    ImportVBAModuleSafe = False
+    
+    ' Verificar que Access esté disponible
+    If objAccess Is Nothing Then
+        LogMessage "Error: objAccess no está disponible"
+        Exit Function
+    End If
+    
+    ' Verificar acceso al VBE de manera segura
+    Dim vbProject
+    Set vbProject = objAccess.VBE.VBProjects(0)
+    If Err.Number <> 0 Or vbProject Is Nothing Then
+        LogMessage "Error: Proyecto VBA no está disponible - verifique configuracion de confianza VBA"
+        Err.Clear
+        Exit Function
+    End If
+    
+    Dim vbComponents
+    Set vbComponents = vbProject.VBComponents
+    If Err.Number <> 0 Or vbComponents Is Nothing Then
+        LogMessage "Error: Componentes VBA no están disponibles"
+        Err.Clear
+        Exit Function
+    End If
+    
+    ' Crear nuevo componente VBA
+    Dim vbComp
+    Set vbComp = vbComponents.Add(moduleType)
+    If Err.Number <> 0 Or vbComp Is Nothing Then
+        LogMessage "Error creando componente VBA " & moduleName & ": " & Err.Description
+        Err.Clear
+        Exit Function
+    End If
+    
+    ' Establecer nombre del módulo
+    vbComp.Name = moduleName
+    If Err.Number <> 0 Then
+        LogMessage "Error estableciendo nombre del modulo " & moduleName & ": " & Err.Description
+        Err.Clear
+        Exit Function
+    End If
+    
+    ' Establecer contenido del modulo
+    Dim vbMod
+    Set vbMod = vbComp.CodeModule
+    If Err.Number <> 0 Or vbMod Is Nothing Then
+        LogMessage "Error accediendo al CodeModule de " & moduleName
+        Err.Clear
+        Exit Function
+    End If
+    
+    vbMod.DeleteLines 1, vbMod.CountOfLines
+    If Err.Number <> 0 Then
+        LogMessage "Error eliminando lineas del modulo " & moduleName & ": " & Err.Description
+        Err.Clear
+        Exit Function
+    End If
+    
+    vbMod.InsertLines 1, moduleContent
+    If Err.Number <> 0 Then
+        LogMessage "Error insertando contenido en modulo " & moduleName & ": " & Err.Description
+        Err.Clear
+        Exit Function
+    End If
+    
+    ' Si llegamos aquí, todo fue exitoso
+    ImportVBAModuleSafe = True
+    On Error GoTo 0
+End Function
+
+' Función para importar modulo VBA (versión original)
 Sub ImportVBAModule(moduleName, moduleContent, moduleType)
     On Error Resume Next
     
-    Dim vbComp, vbMod
+    Dim vbComp, vbMod, vbProject, vbComponents
+    
+    ' Verificar que Access y VBE estén disponibles
+    If objAccess Is Nothing Then
+        LogMessage "Error: objAccess no está disponible"
+        Err.Raise 91, , "Se requiere un objeto - objAccess"
+        Exit Sub
+    End If
+    
+    If objAccess.VBE Is Nothing Then
+        LogMessage "Error: VBE no está disponible"
+        Err.Raise 91, , "Se requiere un objeto - VBE"
+        Exit Sub
+    End If
+    
+    Set vbProject = objAccess.VBE.VBProjects(0)
+    If vbProject Is Nothing Then
+        LogMessage "Error: Proyecto VBA no está disponible"
+        Err.Raise 91, , "Se requiere un objeto - VBProject"
+        Exit Sub
+    End If
+    
+    Set vbComponents = vbProject.VBComponents
+    If vbComponents Is Nothing Then
+        LogMessage "Error: Componentes VBA no están disponibles"
+        Err.Raise 91, , "Se requiere un objeto - VBComponents"
+        Exit Sub
+    End If
     
     ' Crear nuevo componente VBA
-    Set vbComp = objAccess.VBE.VBProjects(0).VBComponents.Add(moduleType)
+    Set vbComp = vbComponents.Add(moduleType)
+    If Err.Number <> 0 Then
+        LogMessage "Error creando componente VBA " & moduleName & ": " & Err.Description
+        Exit Sub
+    End If
+    
+    If vbComp Is Nothing Then
+        LogMessage "Error: No se pudo crear el componente VBA " & moduleName
+        Err.Raise 91, , "Se requiere un objeto - VBComponent"
+        Exit Sub
+    End If
+    
+    ' Establecer nombre del módulo
     vbComp.Name = moduleName
+    If Err.Number <> 0 Then
+        LogMessage "Error estableciendo nombre del modulo " & moduleName & ": " & Err.Description
+        Exit Sub
+    End If
     
     ' Establecer contenido del modulo
     Set vbMod = vbComp.CodeModule
-    vbMod.DeleteLines 1, vbMod.CountOfLines
-    vbMod.InsertLines 1, moduleContent
-    
-    If Err.Number <> 0 Then
-        LogMessage "Error creando modulo VBA " & moduleName & ": " & Err.Description
-        Err.Clear
+    If vbMod Is Nothing Then
+        LogMessage "Error: No se pudo acceder al CodeModule de " & moduleName
+        Err.Raise 91, , "Se requiere un objeto - CodeModule"
+        Exit Sub
     End If
+    
+    vbMod.DeleteLines 1, vbMod.CountOfLines
+    If Err.Number <> 0 Then
+        LogMessage "Error eliminando lineas del modulo " & moduleName & ": " & Err.Description
+        Exit Sub
+    End If
+    
+    vbMod.InsertLines 1, moduleContent
+    If Err.Number <> 0 Then
+        LogMessage "Error insertando contenido en modulo " & moduleName & ": " & Err.Description
+        Exit Sub
+    End If
+    
+    ' Si llegamos aquí, todo fue exitoso
+    LogMessage "Modulo VBA " & moduleName & " creado exitosamente"
 End Sub
 
 ' Función para obtener modulos existentes en la base de datos
 Function GetDatabaseModules()
     On Error Resume Next
     
-    Dim modules, i, vbComp
+    Dim modules, i, vbComp, componentCount, formsCount
     Set modules = CreateObject("Scripting.Dictionary")
     
-    ' Obtener modulos VBA
-    For i = 1 To objAccess.VBE.VBProjects(0).VBComponents.Count
-        Set vbComp = objAccess.VBE.VBProjects(0).VBComponents(i)
-        modules.Add vbComp.Name, Now() ' Usar fecha actual como placeholder
-    Next
+    ' Obtener modulos VBA - verificar que el proyecto VBA existe
+    If Not objAccess.VBE Is Nothing And objAccess.VBE.VBProjects.Count > 0 Then
+        componentCount = objAccess.VBE.VBProjects(0).VBComponents.Count
+        If componentCount > 0 Then
+            For i = 1 To componentCount
+                Set vbComp = objAccess.VBE.VBProjects(0).VBComponents(i)
+                If Not vbComp Is Nothing Then
+                    modules.Add vbComp.Name, Now() ' Usar fecha actual como placeholder
+                End If
+            Next
+        End If
+    End If
     
-    ' Obtener formularios
-    For i = 0 To objAccess.CurrentProject.AllForms.Count - 1
-        modules.Add objAccess.CurrentProject.AllForms(i).Name, Now()
-    Next
+    ' Obtener formularios - verificar que existen
+    If Not objAccess.CurrentProject Is Nothing Then
+        formsCount = objAccess.CurrentProject.AllForms.Count
+        If formsCount > 0 Then
+            For i = 0 To formsCount - 1
+                modules.Add objAccess.CurrentProject.AllForms(i).Name, Now()
+            Next
+        End If
+    End If
     
     Set GetDatabaseModules = modules
     
     If Err.Number <> 0 Then
         LogMessage "Error obteniendo modulos de la base de datos: " & Err.Description
         Err.Clear
+        ' Devolver diccionario vacío en caso de error
+        Set modules = CreateObject("Scripting.Dictionary")
+        Set GetDatabaseModules = modules
     End If
 End Function
 
@@ -1602,29 +1767,7 @@ Sub Main()
         WScript.Quit 1
     End If
     
-    ' Verificar modificadores de testing
-    Dim i
-    For i = 0 To objArgs.Count - 1
-        If objArgs(i) = "/test" Then
-            gTestMode = True
-            LogMessage "Modo de prueba activado"
-            RunTests
-            WScript.Quit 0
-        ElseIf objArgs(i) = "/dry-run" Then
-            gDryRun = True
-            LogMessage "Modo simulación activado"
-        ElseIf objArgs(i) = "/validate" Then
-            ValidateConfig
-            WScript.Quit 0
-        ElseIf objArgs(i) = "/verbose" Then
-            gVerbose = True
-            LogMessage "Modo verbose activado"
-        ElseIf objArgs(i) = "/debug" Then
-            LogMessage "Modo debug activado"
-        End If
-    Next
-    
-    ' Cargar configuración
+    ' Cargar configuración primero
     Set objConfig = LoadConfig(gConfigPath)
     
     ' Aplicar configuración
@@ -1636,22 +1779,63 @@ Sub Main()
         gQuiet = LCase(objConfig.Item("LOGGING_QuietMode")) = "true"
     End If
     
+    ' Crear array de argumentos sin modificadores
+    Dim cleanArgs()
+    Dim cleanArgCount
+    cleanArgCount = 0
+    
+    ' Procesar modificadores y filtrar argumentos
+    Dim i
+    For i = 0 To objArgs.Count - 1
+        If objArgs(i) = "/test" Then
+            gTestMode = True
+            LogMessage "Modo de prueba activado"
+            RunTests
+            WScript.Quit 0
+        ElseIf objArgs(i) = "/dry-run" Then
+            gDryRun = True
+            LogMessage "Modo simulacion activado"
+        ElseIf objArgs(i) = "/validate" Then
+            ValidateConfig
+            WScript.Quit 0
+        ElseIf objArgs(i) = "/verbose" Then
+            gVerbose = True
+            LogMessage "Modo verbose activado"
+        ElseIf objArgs(i) = "/debug" Then
+            LogMessage "Modo debug activado"
+        ElseIf Left(objArgs(i), 10) = "/password:" Then
+            gPassword = Mid(objArgs(i), 11)
+            If gVerbose Then LogMessage "Password configurada desde parametro"
+        Else
+            ' Es un argumento normal, no un modificador
+            ReDim Preserve cleanArgs(cleanArgCount)
+            cleanArgs(cleanArgCount) = objArgs(i)
+            cleanArgCount = cleanArgCount + 1
+        End If
+    Next
+    
+    ' Verificar que tenemos al menos un comando
+    If cleanArgCount = 0 Then
+        ShowHelp
+        WScript.Quit 1
+    End If
+    
     ' Procesar comando principal
     Dim command
-    command = objArgs(0)
+    command = cleanArgs(0)
     
     Select Case LCase(command)
         Case "extract-all"
-            If objArgs.Count >= 2 Then
-                gDbPath = ResolvePath(objArgs(1))
-                If objArgs.Count >= 3 Then 
-                    gOutputPath = ResolvePath(objArgs(2))
+            If cleanArgCount >= 2 Then
+                gDbPath = ResolvePath(cleanArgs(1))
+                If cleanArgCount >= 3 Then 
+                    gOutputPath = ResolvePath(cleanArgs(2))
                 End If
                 
                 If Not gDryRun Then
                     ExtractAll gDbPath, gOutputPath
                 Else
-                    LogMessage "SIMULACIÓN: Extraería toda la información de " & gDbPath
+                    LogMessage "SIMULACION: Extraeria toda la informacion de " & gDbPath
                 End If
             Else
                 LogError "Faltan argumentos para extract-all"
@@ -1659,10 +1843,10 @@ Sub Main()
             End If
             
         Case "extract-tables"
-            If objArgs.Count >= 2 Then
-                gDbPath = ResolvePath(objArgs(1))
-                If objArgs.Count >= 3 Then 
-                    gOutputPath = ResolvePath(objArgs(2))
+            If cleanArgCount >= 2 Then
+                gDbPath = ResolvePath(cleanArgs(1))
+                If cleanArgCount >= 3 Then 
+                    gOutputPath = ResolvePath(cleanArgs(2))
                 End If
                 
                 If Not gDryRun Then
@@ -1672,7 +1856,7 @@ Sub Main()
                         CloseAccess objAccess
                     End If
                 Else
-                    LogMessage "SIMULACIÓN: Extraería información de tablas de " & gDbPath
+                    LogMessage "SIMULACION: Extraeria informacion de tablas de " & gDbPath
                 End If
             Else
                 LogError "Faltan argumentos para extract-tables"
@@ -1680,10 +1864,10 @@ Sub Main()
             End If
             
         Case "extract-forms"
-            If objArgs.Count >= 2 Then
-                gDbPath = ResolvePath(objArgs(1))
-                If objArgs.Count >= 3 Then 
-                    gOutputPath = ResolvePath(objArgs(2))
+            If cleanArgCount >= 2 Then
+                gDbPath = ResolvePath(cleanArgs(1))
+                If cleanArgCount >= 3 Then 
+                    gOutputPath = ResolvePath(cleanArgs(2))
                 End If
                 
                 If Not gDryRun Then
@@ -1693,7 +1877,7 @@ Sub Main()
                         CloseAccess objAccess
                     End If
                 Else
-                    LogMessage "SIMULACIÓN: Extraería información de formularios de " & gDbPath
+                    LogMessage "SIMULACION: Extraeria informacion de formularios de " & gDbPath
                 End If
             Else
                 LogError "Faltan argumentos para extract-forms"
@@ -1702,8 +1886,8 @@ Sub Main()
             
         Case "extract-modules"
             ' Si no se especifica ruta, usar DefaultPath del config
-            If objArgs.Count >= 2 Then
-                gDbPath = ResolvePath(objArgs(1))
+            If cleanArgCount >= 2 Then
+                gDbPath = ResolvePath(cleanArgs(1))
             Else
                 ' Usar DefaultPath de la configuración
                 Dim config
@@ -1723,8 +1907,8 @@ Sub Main()
             End If
             
         Case "rebuild"
-            If objArgs.Count >= 2 Then
-                gDbPath = ResolvePath(objArgs(1))
+            If cleanArgCount >= 2 Then
+                gDbPath = ResolvePath(cleanArgs(1))
                 
                 If Not gDryRun Then
                     If gVerbose Then WScript.Echo "Ejecutando rebuild de modulos VBA..."
@@ -1733,7 +1917,7 @@ Sub Main()
                         WScript.Quit 1
                     End If
                 Else
-                    WScript.Echo "[DRY-RUN] Se ejecutaría rebuild de modulos VBA en: " & gDbPath
+                    WScript.Echo "[DRY-RUN] Se ejecutaria rebuild de modulos VBA en: " & gDbPath
                 End If
             Else
                 WScript.Echo "Error: Se requiere especificar la ruta de la base de datos"
@@ -1742,32 +1926,61 @@ Sub Main()
             End If
             
         Case "update"
-            If objArgs.Count >= 2 Then
-                gDbPath = ResolvePath(objArgs(1))
+            Set config = LoadConfig(gConfigPath)
+            gDbPath = ResolvePath(config("DATABASE_DefaultPath"))
+            
+            If cleanArgCount >= 2 Then
+                ' Hay argumentos adicionales - pueden ser archivos específicos
+                Dim moduleArgs, moduleList
+                moduleArgs = cleanArgs(1)
                 
+                ' Verificar si contiene comas (múltiples archivos)
+                If InStr(moduleArgs, ",") > 0 Then
+                    ' Múltiples archivos separados por comas
+                    moduleList = Split(moduleArgs, ",")
+                    
+                    If Not gDryRun Then
+                        If gVerbose Then WScript.Echo "Ejecutando update de modulos especificos..."
+                        If Not UpdateSpecificModules(gDbPath, moduleList) Then
+                            WScript.Echo "Error: No se pudo completar el update de modulos"
+                            WScript.Quit 1
+                        End If
+                    Else
+                        WScript.Echo "[DRY-RUN] Se ejecutaria update de modulos: " & moduleArgs
+                    End If
+                Else
+                    ' Un solo archivo específico
+                    If Not gDryRun Then
+                        If gVerbose Then WScript.Echo "Ejecutando update de modulo especifico..."
+                        If Not UpdateSpecificModule(gDbPath, moduleArgs) Then
+                            WScript.Echo "Error: No se pudo completar el update del modulo"
+                            WScript.Quit 1
+                        End If
+                    Else
+                        WScript.Echo "[DRY-RUN] Se ejecutaria update del modulo: " & moduleArgs
+                    End If
+                End If
+            Else
+                ' Sin argumentos - actualizar solo módulos más nuevos
                 If Not gDryRun Then
-                    If gVerbose Then WScript.Echo "Ejecutando update de modulos VBA..."
-                    If Not UpdateModules(gDbPath) Then
+                    If gVerbose Then WScript.Echo "Ejecutando update de modulos mas nuevos..."
+                    If Not UpdateNewerModules(gDbPath) Then
                         WScript.Echo "Error: No se pudo completar el update de modulos"
                         WScript.Quit 1
                     End If
                 Else
-                    WScript.Echo "[DRY-RUN] Se ejecutaría update de modulos VBA en: " & gDbPath
+                    WScript.Echo "[DRY-RUN] Se ejecutaria update de modulos mas nuevos en: " & gDbPath
                 End If
-            Else
-                WScript.Echo "Error: Se requiere especificar la ruta de la base de datos"
-                ShowHelp
-                WScript.Quit 1
             End If
             
         Case "list-objects"
-            If objArgs.Count >= 2 Then
-                gDbPath = ResolvePath(objArgs(1))
+            If cleanArgCount >= 2 Then
+                gDbPath = ResolvePath(cleanArgs(1))
                 
                 If Not gDryRun Then
                     ListObjects gDbPath
                 Else
-                    LogMessage "SIMULACIÓN: Listaría objetos de " & gDbPath
+                    LogMessage "SIMULACION: Listaria objetos de " & gDbPath
                 End If
             Else
                 LogError "Faltan argumentos para list-objects"
@@ -1868,6 +2081,270 @@ Sub TestDatabaseConnection()
     On Error GoTo 0
 End Sub
 
+' Función para actualizar un módulo específico
+Function UpdateSpecificModule(dbPath, moduleArg)
+    On Error Resume Next
+    
+    Dim config, srcPath, moduleName, moduleFile, moduleContent
+    Dim fileExt, possibleFiles(1)
+    
+    UpdateSpecificModule = False
+    
+    ' Cargar configuración
+    Set config = LoadConfig(gConfigPath)
+    srcPath = config("MODULES_SrcPath")
+    
+    LogMessage "Iniciando update de modulo especifico: " & moduleArg
+    LogMessage "Base de datos destino: " & dbPath
+    
+    ' Verificar que existe el directorio fuente
+    If Not objFSO.FolderExists(srcPath) Then
+        LogMessage "Error: No existe el directorio fuente de modulos: " & srcPath
+        Exit Function
+    End If
+    
+    ' Abrir Access
+    Set objAccess = OpenAccess(dbPath, gPassword)
+    If objAccess Is Nothing Then
+        LogMessage "Error: No se pudo abrir la base de datos para update"
+        Exit Function
+    End If
+    
+    ' Limpiar el nombre del módulo (quitar src\ si existe)
+    moduleName = moduleArg
+    If InStr(moduleName, "src\") > 0 Then
+        moduleName = Replace(moduleName, "src\", "")
+    End If
+    If InStr(moduleName, "src/") > 0 Then
+        moduleName = Replace(moduleName, "src/", "")
+    End If
+    
+    ' Si ya tiene extensión, usar directamente
+    If Right(LCase(moduleName), 4) = ".cls" Or Right(LCase(moduleName), 4) = ".bas" Then
+        moduleFile = srcPath & "\" & moduleName
+        If objFSO.FileExists(moduleFile) Then
+            LogMessage "Actualizando modulo: " & objFSO.GetBaseName(moduleName) & " desde " & moduleFile
+            
+            ' Leer contenido del archivo
+            moduleContent = ReadModuleFile(moduleFile)
+            
+            If moduleContent <> "" Then
+                ' Importar o actualizar modulo en Access
+                If ImportModuleToAccess(objFSO.GetBaseName(moduleName), moduleContent, moduleFile) Then
+                    UpdateSpecificModule = True
+                Else
+                    LogMessage "Error actualizando modulo: " & objFSO.GetBaseName(moduleName)
+                End If
+            Else
+                LogMessage "Error leyendo archivo de modulo: " & moduleFile
+            End If
+        Else
+            LogMessage "Error: No se encontro el archivo: " & moduleFile
+        End If
+    Else
+        ' Sin extensión - buscar automáticamente .cls o .bas
+        possibleFiles(0) = srcPath & "\" & moduleName & ".cls"
+        possibleFiles(1) = srcPath & "\" & moduleName & ".bas"
+        
+        Dim i, found
+        found = False
+        For i = 0 To 1
+            If objFSO.FileExists(possibleFiles(i)) Then
+                moduleFile = possibleFiles(i)
+                found = True
+                Exit For
+            End If
+        Next
+        
+        If found Then
+            LogMessage "Actualizando modulo: " & moduleName & " desde " & moduleFile
+            
+            ' Leer contenido del archivo
+            moduleContent = ReadModuleFile(moduleFile)
+            
+            If moduleContent <> "" Then
+                ' Importar o actualizar modulo en Access
+                If ImportModuleToAccess(moduleName, moduleContent, moduleFile) Then
+                    UpdateSpecificModule = True
+                Else
+                    LogMessage "Error actualizando modulo: " & moduleName
+                End If
+            Else
+                LogMessage "Error leyendo archivo de modulo: " & moduleFile
+            End If
+        Else
+            LogMessage "Error: No se encontro el modulo " & moduleName & " (.cls o .bas) en: " & srcPath
+        End If
+    End If
+    
+    ' Cerrar Access
+    CloseAccess objAccess
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error durante update especifico: " & Err.Description
+        Err.Clear
+        UpdateSpecificModule = False
+    End If
+End Function
+
+' Función para actualizar múltiples módulos específicos
+Function UpdateSpecificModules(dbPath, moduleList)
+    On Error Resume Next
+    
+    Dim i, moduleName, success, totalSuccess
+    
+    UpdateSpecificModules = False
+    totalSuccess = 0
+    
+    LogMessage "Iniciando update de " & (UBound(moduleList) + 1) & " modulos especificos"
+    
+    For i = 0 To UBound(moduleList)
+        moduleName = Trim(moduleList(i))
+        If moduleName <> "" Then
+            LogMessage "Procesando modulo " & (i + 1) & " de " & (UBound(moduleList) + 1) & ": " & moduleName
+            success = UpdateSpecificModule(dbPath, moduleName)
+            If success Then
+                totalSuccess = totalSuccess + 1
+            End If
+        End If
+    Next
+    
+    If totalSuccess = UBound(moduleList) + 1 Then
+        LogMessage "Update completado exitosamente - " & totalSuccess & " modulos actualizados"
+        UpdateSpecificModules = True
+    Else
+        LogMessage "Update completado con errores - " & totalSuccess & " de " & (UBound(moduleList) + 1) & " modulos actualizados"
+        UpdateSpecificModules = False
+    End If
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error durante update multiple: " & Err.Description
+        Err.Clear
+        UpdateSpecificModules = False
+    End If
+End Function
+
+' Función para actualizar solo módulos más nuevos
+Function UpdateNewerModules(dbPath)
+    On Error Resume Next
+    
+    Dim config, srcPath, extensions, includeSubdirs, filePattern
+    Dim moduleFiles, i, moduleFile, moduleName, moduleContent
+    Dim dbModules, needsUpdate, updatedCount
+    
+    UpdateNewerModules = False
+    updatedCount = 0
+    
+    ' Cargar configuración
+    Set config = LoadConfig(gConfigPath)
+    srcPath = config("MODULES_SrcPath")
+    extensions = config("MODULES_Extensions")
+    includeSubdirs = LCase(config("MODULES_IncludeSubdirectories")) = "true"
+    filePattern = config("MODULES_FilePattern")
+    
+    LogMessage "Iniciando update de modulos mas nuevos desde: " & srcPath
+    LogMessage "Base de datos destino: " & dbPath
+    
+    ' Verificar que existe el directorio fuente
+    If Not objFSO.FolderExists(srcPath) Then
+        LogMessage "Error: No existe el directorio fuente de modulos: " & srcPath
+        Exit Function
+    End If
+    
+    ' Abrir Access
+    Set objAccess = OpenAccess(dbPath, gPassword)
+    If objAccess Is Nothing Then
+        LogMessage "Error: No se pudo abrir la base de datos para update"
+        Exit Function
+    End If
+    
+    ' Obtener modulos existentes en la base de datos
+    Set dbModules = GetDatabaseModules()
+    
+    ' Obtener lista de archivos de modulos
+    moduleFiles = GetModuleFiles(srcPath, extensions, includeSubdirs, filePattern)
+    
+    If UBound(moduleFiles) >= 0 Then
+        LogMessage "Encontrados " & (UBound(moduleFiles) + 1) & " archivos de modulos"
+        
+        ' Procesar cada archivo de modulo
+        For i = 0 To UBound(moduleFiles)
+            moduleFile = moduleFiles(i)
+            moduleName = objFSO.GetBaseName(moduleFile)
+            
+            ' Verificar si necesita actualización (comparar fechas)
+            needsUpdate = ModuleNeedsUpdateByDate(moduleFile, moduleName, dbModules)
+            
+            If needsUpdate Then
+                LogMessage "Actualizando modulo mas nuevo: " & moduleName & " desde " & moduleFile
+                
+                ' Leer contenido del archivo
+                moduleContent = ReadModuleFile(moduleFile)
+                
+                If moduleContent <> "" Then
+                    ' Importar o actualizar modulo en Access
+                    If ImportModuleToAccess(moduleName, moduleContent, moduleFile) Then
+                        updatedCount = updatedCount + 1
+                    Else
+                        LogMessage "Error actualizando modulo: " & moduleName
+                    End If
+                Else
+                    LogMessage "Error leyendo archivo de modulo: " & moduleFile
+                End If
+            Else
+                LogMessage "Modulo " & moduleName & " esta actualizado"
+            End If
+        Next
+        
+        UpdateNewerModules = True
+        LogMessage "Update completado exitosamente - " & updatedCount & " modulos actualizados"
+    Else
+        LogMessage "No se encontraron archivos de modulos en: " & srcPath
+        UpdateNewerModules = True ' No es error si no hay modulos
+    End If
+    
+    ' Cerrar Access
+    CloseAccess objAccess
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error durante update de modulos mas nuevos: " & Err.Description
+        Err.Clear
+        UpdateNewerModules = False
+    End If
+End Function
+
+' Función para verificar si un módulo necesita actualización por fecha
+Function ModuleNeedsUpdateByDate(filePath, moduleName, dbModules)
+    On Error Resume Next
+    
+    Dim fileDate
+    
+    ModuleNeedsUpdateByDate = True ' Por defecto, actualizar
+    
+    ' Obtener fecha del archivo
+    fileDate = objFSO.GetFile(filePath).DateLastModified
+    
+    ' Si el modulo no existe en la BD, necesita actualización
+    If Not dbModules.Exists(moduleName) Then
+        ModuleNeedsUpdateByDate = True
+        Exit Function
+    End If
+    
+    ' Por simplicidad, comparar solo si el archivo es más nuevo que hace 1 día
+    ' En una implementación más avanzada, se podría obtener la fecha real del módulo en la BD
+    If DateDiff("d", fileDate, Now()) <= 1 Then
+        ModuleNeedsUpdateByDate = True
+    Else
+        ModuleNeedsUpdateByDate = False
+    End If
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error verificando fecha de actualizacion para " & moduleName & ": " & Err.Description
+        Err.Clear
+        ModuleNeedsUpdateByDate = True
+    End If
+End Function
+
 ' Función para listar objetos de la base de datos
 Sub ListObjects(dbPath)
     LogMessage "Listando objetos de: " & objFSO.GetFileName(dbPath)
@@ -1897,7 +2374,7 @@ Sub ListObjects(dbPath)
         WScript.Echo "  " & qry.Name
     Next
     
-    CloseAccess
+    CloseAccess objAccess
 End Sub
 
 ' Función para validar configuración
