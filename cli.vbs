@@ -48,6 +48,11 @@ Dim objFSO, objArgs, objAccess, objConfig
 Dim gVerbose, gQuiet, gDryRun, gDebug
 Dim gDbPath, gPassword, gOutputPath, gConfigPath, gScriptPath, gScriptDir
 Dim g_ModulesSrcPath, g_ModulesExtensions, g_ModulesIncludeSubdirs
+
+' Variables para ImportFormFromJson
+Dim ImportFormFromJson_app
+Dim ImportFormFromJson_target
+Dim ImportFormFromJson_root
 Dim gConfig
 
 ' ============================================================================
@@ -179,6 +184,9 @@ Sub ShowHelp()
     WScript.Echo ""
     WScript.Echo "  schema [db_path] [--table <nombre>] [--out <ruta>] [--format json|md]"
     WScript.Echo "    Exporta la estructura de tablas. Por defecto usa DATABASE_DefaultPath del ini."
+    WScript.Echo ""
+    WScript.Echo "  form-export [db_path] --form <NombreFormulario> --out <ruta.json>"
+    WScript.Echo "  form-import <json_path> [db_path] [--name NuevoNombre] [--overwrite] [--dry-run]"
     WScript.Echo ""
     WScript.Echo "OPCIONES:"
     WScript.Echo "  --config <path>       - Archivo de configuracion (por defecto: cli.ini)"
@@ -2140,6 +2148,52 @@ Sub Main()
             End If
             WScript.Quit 0
             
+        Case "form-export"
+            ' Uso: form-export [db_path] --form <NombreFormulario> --out <ruta.json>
+            Dim dbArg, outArg, formArg, k
+            dbArg = "": outArg = "": formArg = ""
+            For k = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k))
+                    Case "--form": If k < cleanArgCount - 1 Then formArg = cleanArgs(k+1): k = k + 1
+                    Case "--out":  If k < cleanArgCount - 1 Then outArg  = cleanArgs(k+1): k = k + 1
+                    Case Else: If dbArg = "" Then dbArg = cleanArgs(k)
+                End Select
+            Next
+            If formArg = "" Then WScript.Echo "Error: --form es obligatorio": WScript.Quit 1
+            If dbArg = "" Then
+                Set config = LoadConfig(gConfigPath)
+                dbArg = config("DATABASE_DefaultPath")
+            End If
+            gDbPath = ResolvePath(dbArg)
+            If outArg = "" Then outArg = gScriptDir & "\output\forms\" & formArg & ".json"
+            outArg = ResolvePath(outArg)
+            CreateFolderRecursive objFSO.GetParentFolderName(outArg)
+            If Not ExportFormToJson(gDbPath, formArg, outArg) Then WScript.Quit 1
+            WScript.Quit 0
+            
+        Case "form-import"
+            ' Uso: form-import <json_path> [db_path] [--name NuevoNombre] [--overwrite] [--dry-run]
+            Dim jsonArg, nameOpt, ow, dry
+            jsonArg = "": dbArg = "": nameOpt = "": ow = False: dry = False
+            For k = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k))
+                    Case "--name": If k < cleanArgCount - 1 Then nameOpt = cleanArgs(k+1): k = k + 1
+                    Case "--overwrite": ow = True
+                    Case "--dry-run": dry = True
+                    Case Else
+                        If jsonArg = "" Then jsonArg = cleanArgs(k) Else If dbArg = "" Then dbArg = cleanArgs(k)
+                End Select
+            Next
+            If jsonArg = "" Then WScript.Echo "Error: falta json_path": WScript.Quit 1
+            jsonArg = ResolvePath(jsonArg)
+            If dbArg = "" Then
+                Set config = LoadConfig(gConfigPath)
+                dbArg = config("DATABASE_DefaultPath")
+            End If
+            gDbPath = ResolvePath(dbArg)
+            If Not ImportFormFromJson(gDbPath, jsonArg, nameOpt, ow, dry) Then WScript.Quit 1
+            WScript.Quit 0
+            
         Case "test"
             RunTests
             
@@ -3119,3 +3173,640 @@ End Sub
 
 ' Ejecutar función principal
 Main()
+
+' === FUNCIONES DE EXPORTACION DE FORMULARIOS ===
+
+Function ExportFormToJson(dbPath, formName, outJson)
+    On Error Resume Next
+    ExportFormToJson = False
+    Dim app: Set app = OpenAccess(dbPath, GetDatabasePassword(dbPath))
+    If app Is Nothing Then Exit Function
+
+    ' Abrir en diseño y oculto
+    app.DoCmd.OpenForm formName, 1, , , , 1 ' acDesign=1, acHidden=1
+    If Err.Number <> 0 Then
+        LogMessage "form-export: no se pudo abrir " & formName & " en diseño: " & Err.Description
+        Err.Clear: CloseAccess app: Exit Function
+    End If
+
+    Dim frm: Set frm = app.Forms(formName)
+    Dim root: Set root = CreateObject("Scripting.Dictionary")
+    root("name") = formName
+    root("type") = "Form"
+    root("recordSource") = SafeProp(frm, "RecordSource")
+    root("caption") = SafeProp(frm, "Caption")
+    root("width") = SafeProp(frm, "Width")
+    root("sectionHeights") = DictFromSections(frm)   ' Detail/Header/Footer heights si aplican
+
+    ' Controles (orden determinista por Name)
+    Dim names: names = ControlNamesSorted(frm)
+    Dim arr(), i, c
+    If IsArray(names) Then
+        ReDim arr(UBound(names))
+        For i = 0 To UBound(names)
+            Set c = frm.Controls(names(i))
+            Set arr(i) = ControlToDict(c)
+        Next
+        root("controls") = arr
+    Else
+        root("controls") = Array()
+    End If
+
+    ' Guardar JSON (usa SaveToJSON existente)
+    SaveToJSON root, outJson
+
+    ' Cerrar sin guardar
+    app.DoCmd.Close 2, formName, 2 ' acForm=2, acSaveNo=2
+    CloseAccess app
+    ExportFormToJson = True
+End Function
+
+' === Helpers export ===
+Function SafeProp(obj, p)
+    On Error Resume Next
+    Dim v: v = ""
+    v = CallByName(obj, p, 2) ' vbGet=2
+    If Err.Number <> 0 Then Err.Clear: v = ""
+    SafeProp = v
+End Function
+
+Function DictFromSections(frm)
+    On Error Resume Next
+    Dim d: Set d = CreateObject("Scripting.Dictionary")
+    d("detail") = frm.Section(0).Height ' acDetail=0
+    If Err.Number = 0 Then
+        d("header") = frm.Section(1).Height ' acHeader=1
+        Err.Clear
+        d("footer") = frm.Section(2).Height ' acFooter=2
+        Err.Clear
+    End If
+    Set DictFromSections = d
+End Function
+
+Function ControlNamesSorted(frm)
+    On Error Resume Next
+    Dim list(), i, n
+    n = frm.Controls.Count
+    If n <= 0 Then Exit Function
+    ReDim list(n-1)
+    For i = 0 To n-1: list(i) = frm.Controls(i).Name: Next
+    QuickSortStrings list, 0, n-1
+    ControlNamesSorted = list
+End Function
+
+Function ControlToDict(ctrl)
+    On Error Resume Next
+    Dim d: Set d = CreateObject("Scripting.Dictionary")
+    d("name") = ctrl.Name
+    d("controlType") = ctrl.ControlType
+    d("section") = ctrl.Section
+    d("left") = ctrl.Left
+    d("top") = ctrl.Top
+    d("width") = ctrl.Width
+    d("height") = ctrl.Height
+    d("tabIndex") = SafeProp(ctrl, "TabIndex")
+    d("tabStop") = SafeProp(ctrl, "TabStop")
+    d("visible") = SafeProp(ctrl, "Visible")
+    d("enabled") = SafeProp(ctrl, "Enabled")
+    d("locked") = SafeProp(ctrl, "Locked")
+    d("controlSource") = SafeProp(ctrl, "ControlSource")
+    d("rowSource") = SafeProp(ctrl, "RowSource")
+    d("sourceObject") = SafeProp(ctrl, "SourceObject") ' subform/subreport
+    d("caption") = SafeProp(ctrl, "Caption")
+    d("format") = SafeProp(ctrl, "Format")
+    d("fontName") = SafeProp(ctrl, "FontName")
+    d("fontSize") = SafeProp(ctrl, "FontSize")
+    d("foreColor") = SafeProp(ctrl, "ForeColor")
+    d("backColor") = SafeProp(ctrl, "BackColor")
+    ' eventos (expresiones)
+    d("onClick") = SafeProp(ctrl, "OnClick")
+    d("onDblClick") = SafeProp(ctrl, "OnDblClick")
+    d("onChange") = SafeProp(ctrl, "OnChange")
+    d("onCurrent") = SafeProp(ctrl, "OnCurrent")
+    Set ControlToDict = d
+End Function
+
+' Implementación simple de QuickSort para strings
+Sub QuickSortStrings(arr, low, high)
+    On Error Resume Next
+    If low < high Then
+        Dim pi
+        pi = PartitionStrings(arr, low, high)
+        QuickSortStrings arr, low, pi - 1
+        QuickSortStrings arr, pi + 1, high
+    End If
+End Sub
+
+Function PartitionStrings(arr, low, high)
+    On Error Resume Next
+    Dim pivot, i, j, temp
+    pivot = arr(high)
+    i = low - 1
+    
+    For j = low To high - 1
+        If LCase(arr(j)) <= LCase(pivot) Then
+            i = i + 1
+            temp = arr(i)
+            arr(i) = arr(j)
+            arr(j) = temp
+        End If
+    Next
+    
+    temp = arr(i + 1)
+    arr(i + 1) = arr(high)
+    arr(high) = temp
+    
+    PartitionStrings = i + 1
+End Function
+
+Function GetParentFolder(p)
+    On Error Resume Next
+    Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
+    GetParentFolder = fso.GetParentFolderName(p)
+End Function
+
+Function ReadAllText(path)
+    On Error Resume Next
+    Dim stream
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 2 ' adTypeText
+    stream.Charset = "UTF-8"
+    stream.Open
+    stream.LoadFromFile path
+    ReadAllText = stream.ReadText
+    stream.Close
+    If Err.Number <> 0 Then ReadAllText = ""
+    Err.Clear
+End Function
+
+Function JsonParse(json)
+    On Error Resume Next
+    Dim parser
+    Set parser = New JsonParser
+    Set JsonParse = parser.Parse(json)
+    If Err.Number <> 0 Then Set JsonParse = Nothing
+    Err.Clear
+End Function
+
+Function CreateDict()
+    Set CreateDict = CreateObject("Scripting.Dictionary")
+End Function
+
+Function CreateList()
+    On Error Resume Next
+    Set CreateList = CreateObject("System.Collections.ArrayList")
+    If Err.Number <> 0 Then
+        ' Fallback a Dictionary como lista si ArrayList no está disponible
+        Err.Clear
+        Set CreateList = CreateObject("Scripting.Dictionary")
+    End If
+    On Error GoTo 0
+End Function
+
+' Clase JsonParser - Convierte JSON a objetos VBA
+Class JsonParser
+    Private pos
+    Private jsonText
+    
+    Public Function Parse(json)
+        jsonText = json
+        pos = 1
+        SkipWhitespace
+        Set Parse = ParseValue()
+    End Function
+    
+    Private Function ParseValue()
+        SkipWhitespace
+        Dim char
+        char = Mid(jsonText, pos, 1)
+        
+        Select Case char
+            Case "{"
+                Set ParseValue = ParseObject()
+            Case "["
+                Set ParseValue = ParseArray()
+            Case Chr(34) ' "
+                ParseValue = ParseString()
+            Case "t", "f"
+                ParseValue = ParseBoolean()
+            Case "n"
+                ParseValue = ParseNull()
+            Case Else
+                If IsNumeric(char) Or char = "-" Then
+                    ParseValue = ParseNumber()
+                Else
+                    Err.Raise 1001, "JsonParser", "Caracter inesperado en posicion " & pos & ": " & char
+                End If
+        End Select
+    End Function
+    
+    Private Function ParseObject()
+        Dim obj
+        Set obj = CreateDict()
+        pos = pos + 1 ' Saltar '{'
+        SkipWhitespace
+        
+        If Mid(jsonText, pos, 1) = "}" Then
+            pos = pos + 1
+            Set ParseObject = obj
+            Exit Function
+        End If
+        
+        Do
+            SkipWhitespace
+            Dim key
+            key = ParseString()
+            SkipWhitespace
+            
+            If Mid(jsonText, pos, 1) <> ":" Then
+                Err.Raise 1002, "JsonParser", "Se esperaba ':' despues de la clave"
+            End If
+            pos = pos + 1
+            
+            Dim value
+             Set value = ParseValue()
+             If IsObject(value) Then
+                 Set obj(key) = value
+             Else
+                 obj(key) = value
+             End If
+            
+            SkipWhitespace
+            Dim nextChar
+            nextChar = Mid(jsonText, pos, 1)
+            
+            If nextChar = "}" Then
+                pos = pos + 1
+                Exit Do
+            ElseIf nextChar = "," Then
+                pos = pos + 1
+            Else
+                Err.Raise 1003, "JsonParser", "Se esperaba ',' o '}'"
+            End If
+        Loop
+        
+        Set ParseObject = obj
+    End Function
+    
+    Private Function ParseArray()
+        Dim arr
+        Set arr = CreateList()
+        pos = pos + 1 ' Saltar '['
+        SkipWhitespace
+        
+        If Mid(jsonText, pos, 1) = "]" Then
+            pos = pos + 1
+            Set ParseArray = arr
+            Exit Function
+        End If
+        
+        Do
+             Dim value
+             Set value = ParseValue()
+             If IsObject(value) Then
+                 arr.Add value
+             Else
+                 arr.Add value
+             End If
+            
+            SkipWhitespace
+            Dim nextChar
+            nextChar = Mid(jsonText, pos, 1)
+            
+            If nextChar = "]" Then
+                pos = pos + 1
+                Exit Do
+            ElseIf nextChar = "," Then
+                pos = pos + 1
+            Else
+                Err.Raise 1004, "JsonParser", "Se esperaba ',' o ']'"
+            End If
+        Loop
+        
+        Set ParseArray = arr
+    End Function
+    
+    Private Function ParseString()
+        pos = pos + 1 ' Saltar '"' inicial
+        Dim result, char
+        result = ""
+        
+        Do While pos <= Len(jsonText)
+            char = Mid(jsonText, pos, 1)
+            
+            If char = Chr(34) Then ' "
+                pos = pos + 1
+                ParseString = result
+                Exit Function
+            ElseIf char = "\" Then
+                pos = pos + 1
+                If pos > Len(jsonText) Then Exit Do
+                
+                Dim escapeChar
+                escapeChar = Mid(jsonText, pos, 1)
+                Select Case escapeChar
+                    Case Chr(34) ' "
+                        result = result & Chr(34)
+                    Case "\"
+                        result = result & "\"
+                    Case "b"
+                        result = result & Chr(8)
+                    Case "f"
+                        result = result & Chr(12)
+                    Case "n"
+                        result = result & Chr(10)
+                    Case "r"
+                        result = result & Chr(13)
+                    Case "t"
+                        result = result & Chr(9)
+                    Case Else
+                        result = result & escapeChar
+                End Select
+            Else
+                result = result & char
+            End If
+            pos = pos + 1
+        Loop
+        
+        Err.Raise 1005, "JsonParser", "String sin terminar"
+    End Function
+    
+    Private Function ParseNumber()
+        Dim numStr, char
+        numStr = ""
+        
+        Do While pos <= Len(jsonText)
+            char = Mid(jsonText, pos, 1)
+            If IsNumeric(char) Or char = "." Or char = "-" Or char = "+" Or LCase(char) = "e" Then
+                numStr = numStr & char
+                pos = pos + 1
+            Else
+                Exit Do
+            End If
+        Loop
+        
+        If IsNumeric(numStr) Then
+            ParseNumber = CDbl(numStr)
+        Else
+            Err.Raise 1006, "JsonParser", "Numero invalido: " & numStr
+        End If
+    End Function
+    
+    Private Function ParseBoolean()
+        If Mid(jsonText, pos, 4) = "true" Then
+            pos = pos + 4
+            ParseBoolean = True
+        ElseIf Mid(jsonText, pos, 5) = "false" Then
+            pos = pos + 5
+            ParseBoolean = False
+        Else
+            Err.Raise 1007, "JsonParser", "Valor booleano invalido"
+        End If
+    End Function
+    
+    Private Function ParseNull()
+        If Mid(jsonText, pos, 4) = "null" Then
+            pos = pos + 4
+            ParseNull = Null
+        Else
+            Err.Raise 1008, "JsonParser", "Valor null invalido"
+        End If
+    End Function
+    
+    Private Sub SkipWhitespace()
+        Do While pos <= Len(jsonText)
+            Dim char
+            char = Mid(jsonText, pos, 1)
+            If char = " " Or char = Chr(9) Or char = Chr(10) Or char = Chr(13) Then
+                pos = pos + 1
+            Else
+                Exit Do
+            End If
+        Loop
+    End Sub
+End Class
+
+Function ImportFormFromJson(dbPath, jsonPath, nameOpt, overwrite, dryRun)
+    On Error Resume Next
+    ImportFormFromJson = False
+
+    ' Resolver rutas
+    Dim resolvedJsonPath: resolvedJsonPath = ResolvePath(jsonPath)
+    Dim resolvedDbPath: resolvedDbPath = ResolvePath(dbPath)
+    
+    ' Leer JSON
+    Dim json: json = ReadAllText(resolvedJsonPath)
+    If json = "" Then 
+        LogMessage "form-import: JSON vacio o no accesible"
+        Exit Function
+    End If
+
+    ' Parsear JSON
+    Dim root: Set root = JsonParse(json)
+    If root Is Nothing Then 
+        LogMessage "form-import: JSON invalido"
+        Exit Function
+    End If
+
+    ' Obtener nombre del formulario
+    Dim targetName: targetName = nameOpt
+    If targetName = "" Then targetName = GetDict(root, "name", "")
+    If targetName = "" Then 
+        LogMessage "form-import: falta nombre de formulario"
+        Exit Function
+    End If
+
+    ' Abrir Access usando función canónica
+    Dim app: Set app = OpenAccess(resolvedDbPath, GetDatabasePassword(resolvedDbPath))
+    If app Is Nothing Then Exit Function
+
+    ' Manejar overwrite
+    If overwrite Then
+        On Error Resume Next
+        app.DoCmd.DeleteObject 2, targetName  ' acForm=2
+        Err.Clear
+    End If
+
+    ' Modo dry-run
+    If dryRun Then
+        LogMessage "form-import(dry-run): validacion OK para " & targetName
+        CloseAccess app
+        ImportFormFromJson = True
+        Exit Function
+    End If
+
+    ' Intentar abrir en diseño oculto; si no existe, crear y renombrar
+    On Error Resume Next
+    app.DoCmd.OpenForm targetName, 1, , , , 1   ' acDesign=1, acHidden=1
+    If Err.Number <> 0 Then
+        Err.Clear
+        app.DoCmd.OpenForm , 1, , , , 1          ' crear nuevo formulario en diseño oculto
+        If Err.Number <> 0 Then
+            LogMessage "form-import: no se pudo crear formulario: " & Err.Description
+            Err.Clear
+            CloseAccess app
+            Exit Function
+        End If
+        Dim newName: newName = app.Screen.ActiveForm.Name
+        app.DoCmd.Rename targetName, 2, newName   ' acForm=2
+        Err.Clear
+        app.DoCmd.OpenForm targetName, 1, , , , 1
+        Err.Clear
+    End If
+
+    ' Guardar referencias para las siguientes fases
+    Set ImportFormFromJson_app = app
+    ImportFormFromJson_target = targetName
+    Set ImportFormFromJson_root = root
+
+    ' Ejecutar fase 2: aplicar propiedades y controles
+    If Not ImportFormFromJson_Apply() Then
+        LogMessage "form-import: error en fase de aplicacion"
+        CloseAccess app
+        Exit Function
+    End If
+
+    ' Ejecutar fase 3: finalizar y cerrar
+    If Not ImportFormFromJson_Finalize() Then
+        LogMessage "form-import: error en fase de finalizacion"
+        Exit Function
+    End If
+
+    ImportFormFromJson = True
+End Function
+
+Function ImportFormFromJson_Apply()
+    On Error Resume Next
+    ImportFormFromJson_Apply = False
+
+    If ImportFormFromJson_app Is Nothing Then Exit Function
+    Dim app: Set app = ImportFormFromJson_app
+    Dim targetName: targetName = ImportFormFromJson_target
+    Dim root: Set root = ImportFormFromJson_root
+
+    Dim frm: Set frm = app.Forms(targetName)
+
+    ' Propiedades de formulario
+    SetPropIfExists frm, "RecordSource", GetDict(root, "recordSource", "")
+    SetPropIfExists frm, "Caption", GetDict(root, "caption", "")
+    ApplySections frm, root
+
+    ' Limpiar controles existentes
+    DeleteAllControls frm
+
+    ' Crear controles desde JSON (orden dado)
+    Dim i, arr
+    If root.Exists("controls") Then
+        arr = root("controls")
+        If IsArray(arr) Then
+            For i = 0 To UBound(arr)
+                CreateControlFromJson app, targetName, arr(i)
+            Next
+        End If
+    End If
+
+    ImportFormFromJson_Apply = True
+End Function
+
+Sub SetPropIfExists(obj, p, v)
+    On Error Resume Next
+    If IsEmpty(v) Then Exit Sub
+    CallByName obj, p, 4, v   ' vbLet=4
+    Err.Clear
+End Sub
+
+Function GetDict(d, k, def)
+    On Error Resume Next
+    If d.Exists(k) Then GetDict = d(k) Else GetDict = def
+End Function
+
+Sub ApplySections(frm, root)
+    On Error Resume Next
+    Dim s: Set s = GetDictObject(root, "sectionHeights")
+    If Not s Is Nothing Then
+        If s.Exists("detail") Then frm.Section(0).Height = s("detail") ' acDetail=0
+        If s.Exists("header") Then frm.Section(1).Height = s("header") ' acHeader=1
+        If s.Exists("footer") Then frm.Section(2).Height = s("footer") ' acFooter=2
+    End If
+End Sub
+
+Function GetDictObject(d, k)
+    On Error Resume Next
+    If d.Exists(k) Then
+        If IsObject(d(k)) Then Set GetDictObject = d(k)
+    End If
+End Function
+
+Sub DeleteAllControls(frm)
+    On Error Resume Next
+    Dim i
+    For i = frm.Controls.Count - 1 To 0 Step -1
+        frm.Controls.Remove frm.Controls(i).Name
+    Next
+End Sub
+
+Sub CreateControlFromJson(app, formName, cjson)
+    On Error Resume Next
+    Dim ct, sec, name, left, top, width, height, ctrl
+    ct    = GetDict(cjson, "controlType", 109) ' default textbox (Access: acTextBox=109)
+    sec   = GetDict(cjson, "section", 0)      ' acDetail
+    name  = GetDict(cjson, "name", "")
+    left  = GetDict(cjson, "left", 0)
+    top   = GetDict(cjson, "top", 0)
+    width = GetDict(cjson, "width", 1200)
+    height= GetDict(cjson, "height", 300)
+
+    Set ctrl = app.CreateControl(formName, ct, sec, , , left, top, width, height)
+    If name <> "" Then On Error Resume Next: ctrl.Name = name: Err.Clear
+
+    ' Propiedades comunes
+    SetCtrlProp ctrl, "ControlSource", GetDict(cjson, "controlSource", "")
+    SetCtrlProp ctrl, "RowSource",     GetDict(cjson, "rowSource", "")
+    SetCtrlProp ctrl, "SourceObject",  GetDict(cjson, "sourceObject", "")
+    SetCtrlProp ctrl, "Caption",       GetDict(cjson, "caption", "")
+    SetCtrlProp ctrl, "Format",        GetDict(cjson, "format", "")
+    SetCtrlProp ctrl, "FontName",      GetDict(cjson, "fontName", "")
+    SetCtrlProp ctrl, "FontSize",      GetDict(cjson, "fontSize", "")
+    SetCtrlProp ctrl, "ForeColor",     GetDict(cjson, "foreColor", "")
+    SetCtrlProp ctrl, "BackColor",     GetDict(cjson, "backColor", "")
+    SetCtrlProp ctrl, "TabIndex",      GetDict(cjson, "tabIndex", "")
+    SetCtrlProp ctrl, "TabStop",       GetDict(cjson, "tabStop", "")
+    SetCtrlProp ctrl, "Visible",       GetDict(cjson, "visible", "")
+    SetCtrlProp ctrl, "Enabled",       GetDict(cjson, "enabled", "")
+    SetCtrlProp ctrl, "Locked",        GetDict(cjson, "locked", "")
+    ' Eventos (expresión)
+    SetCtrlProp ctrl, "OnClick",       GetDict(cjson, "onClick", "")
+    SetCtrlProp ctrl, "OnDblClick",    GetDict(cjson, "onDblClick", "")
+    SetCtrlProp ctrl, "OnChange",      GetDict(cjson, "onChange", "")
+    SetCtrlProp ctrl, "OnCurrent",     GetDict(cjson, "onCurrent", "")
+End Sub
+
+Sub SetCtrlProp(ctrl, p, v)
+    On Error Resume Next
+    If IsEmpty(v) Or v = "" Then Exit Sub
+    CallByName ctrl, p, 4, v   ' vbLet=4
+    Err.Clear
+End Sub
+
+Function ImportFormFromJson_Finalize()
+    On Error Resume Next
+    ImportFormFromJson_Finalize = False
+    If ImportFormFromJson_app Is Nothing Then Exit Function
+
+    Dim app: Set app = ImportFormFromJson_app
+    Dim targetName: targetName = ImportFormFromJson_target
+
+    app.DoCmd.Save 2, targetName       ' acForm
+    On Error Resume Next
+    app.RunCommand 126                 ' acCmdCompileAndSaveAllModules
+    Err.Clear
+    app.DoCmd.Close 2, targetName, 0   ' acSaveYes=0 (ya guardado)
+    CloseAccess app
+
+    ' Limpiar referencias
+    Set ImportFormFromJson_app = Nothing
+    ImportFormFromJson_target = ""
+    Set ImportFormFromJson_root = Nothing
+
+    ImportFormFromJson_Finalize = True
+End Function
