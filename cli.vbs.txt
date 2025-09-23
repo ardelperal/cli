@@ -27,7 +27,7 @@ Const acHidden = 1
 Const acNormal = 0
 
 ' Constantes de comandos de Access
-Const acCmdCompileAndSaveAllModules = 636
+Const acCmdCompileAndSaveAllModules = 126
 
 ' Constantes de controles
 Const acLabel = 100
@@ -177,6 +177,9 @@ Sub ShowHelp()
     WScript.Echo "  update <db_path>"
     WScript.Echo "    Actualizar modulos VBA desde src"
     WScript.Echo ""
+    WScript.Echo "  schema [db_path] [--table <nombre>] [--out <ruta>] [--format json|md]"
+    WScript.Echo "    Exporta la estructura de tablas. Por defecto usa DATABASE_DefaultPath del ini."
+    WScript.Echo ""
     WScript.Echo "OPCIONES:"
     WScript.Echo "  --config <path>       - Archivo de configuracion (por defecto: cli.ini)"
     WScript.Echo "  --password <pwd>      - Contrasena de la base de datos"
@@ -193,6 +196,8 @@ Sub ShowHelp()
     WScript.Echo "  cscript cli.vbs list-objects ""C:\mi_base.accdb"" --verbose"
     WScript.Echo "  cscript cli.vbs rebuild"
     WScript.Echo "  cscript cli.vbs update ""C:\mi_base.accdb"" /verbose"
+    WScript.Echo "  cscript cli.vbs schema --table Usuarios --format md"
+    WScript.Echo "  cscript cli.vbs schema ""C:\mi_base.accdb"" --out ""C:\temp"""
 End Sub
 
 ' ============================================================================
@@ -636,6 +641,245 @@ Function ExtractFormControlsInternal(frm)
 End Function
 
 ' ============================================================================
+' SECCIÓN 6: FUNCIONES DE EXPORTACIÓN DE ESQUEMA
+' ============================================================================
+
+' Exporta estructura de todas las tablas o una tabla
+Function ExportSchema(dbPath, tableFilter, outDir, fmt)
+    On Error Resume Next
+    ExportSchema = False
+
+    Dim app: Set app = OpenAccess(dbPath, GetDatabasePassword(dbPath))
+    If app Is Nothing Then Exit Function
+
+    Dim db: Set db = app.CurrentDb
+    Dim schema, tdef, rel
+    Set schema = CreateObject("Scripting.Dictionary")
+
+    ' Índices de relaciones por tabla (FK entrantes/salientes)
+    Dim relsOut, relsIn
+    Set relsOut = CreateObject("Scripting.Dictionary")
+    Set relsIn  = CreateObject("Scripting.Dictionary")
+
+    ' Precalcular relaciones
+    For Each rel In db.Relations
+        If Left(rel.Table,4) <> "MSys" And Left(rel.ForeignTable,4) <> "MSys" Then
+            Dim rf, arr, i
+            ' salientes desde rel.Table
+            If Not relsOut.Exists(rel.Table) Then relsOut(rel.Table) = Array()
+            arr = relsOut(rel.Table)
+            ReDim Preserve arr(UBound(arr)+1)
+            Set arr(UBound(arr)) = rel
+            relsOut(rel.Table) = arr
+            ' entrantes hacia rel.ForeignTable
+            If Not relsIn.Exists(rel.ForeignTable) Then relsIn(rel.ForeignTable) = Array()
+            arr = relsIn(rel.ForeignTable)
+            ReDim Preserve arr(UBound(arr)+1)
+            Set arr(UBound(arr)) = rel
+            relsIn(rel.ForeignTable) = arr
+        End If
+    Next
+
+    ' Recorre tablas
+    For Each tdef In db.TableDefs
+        If Left(tdef.Name,4) <> "MSys" Then
+            If (tableFilter = "") Or (StrComp(tdef.Name, tableFilter, vbTextCompare) = 0) Then
+                Dim tinfo: Set tinfo = CreateObject("Scripting.Dictionary")
+                tinfo("name") = tdef.Name
+                tinfo("dateCreated") = tdef.DateCreated
+                tinfo("lastUpdated") = tdef.LastUpdated
+
+                ' Campos
+                Dim f, fields: Set fields = CreateObject("Scripting.Dictionary")
+                For Each f In tdef.Fields
+                    Dim finfo: Set finfo = CreateObject("Scripting.Dictionary")
+                    finfo("name") = f.Name
+                    finfo("type") = GetFieldTypeName(f.Type)
+                    finfo("size") = f.Size
+                    finfo("required") = f.Required
+                    finfo("allowZeroLength") = f.AllowZeroLength
+                    On Error Resume Next
+                    finfo("defaultValue") = f.DefaultValue
+                    finfo("validationRule") = f.ValidationRule
+                    finfo("validationText") = f.ValidationText
+                    On Error GoTo 0
+                    Set fields(f.Name) = finfo
+                    If gDebug Then LogMessage "Campo agregado: " & f.Name & " (" & GetFieldTypeName(f.Type) & ")"
+                Next
+                Set tinfo("fields") = fields
+                If gDebug Then LogMessage "Total campos en " & tdef.Name & ": " & fields.Count
+
+                ' Índices y PK
+                Dim idx, indexes: Set indexes = CreateObject("Scripting.Dictionary")
+                Dim pkCols: pkCols = ""
+                For Each idx In tdef.Indexes
+                    Dim idic: Set idic = CreateObject("Scripting.Dictionary")
+                    idic("name") = idx.Name
+                    idic("primary") = idx.Primary
+                    idic("unique") = idx.Unique
+                    ' columnas del índice
+                    Dim c, cols: cols = ""
+                    For Each c In idx.Fields
+                        If cols <> "" Then cols = cols & ", "
+                        cols = cols & c.Name
+                    Next
+                    idic("columns") = cols
+                    Set indexes(idx.Name) = idic
+                    If idx.Primary Then pkCols = cols
+                Next
+                Set tinfo("indexes") = indexes
+                tinfo("primaryKey") = pkCols
+
+                ' Relaciones (FK salientes y entrantes)
+                tinfo("relationsOut") = DescribeRelationsArray(relsOut, tdef.Name)
+                tinfo("relationsIn")  = DescribeRelationsArray(relsIn,  tdef.Name)
+
+                Set schema(tdef.Name) = tinfo
+            End If
+        End If
+    Next
+
+    ' Salida
+    Dim outFile
+    If tableFilter = "" Then
+        outFile = outDir & "\schema_all." & fmt
+    Else
+        outFile = outDir & "\schema_" & tableFilter & "." & fmt
+    End If
+
+    If LCase(fmt) = "md" Then
+        SaveSchemaAsMarkdown schema, outFile
+    Else
+        SaveToJSON schema, outFile
+    End If
+
+    CloseAccess app
+    ExportSchema = True
+End Function
+
+' Convierte listado de relaciones a matriz de diccionarios
+Function DescribeRelationsArray(relIndex, tableName)
+    On Error Resume Next
+    Dim arr, i, out(), count: count = 0
+    If relIndex.Exists(tableName) Then
+        arr = relIndex(tableName)
+        ReDim out(UBound(arr))
+        For i = 0 To UBound(arr)
+            Dim d: Set d = CreateObject("Scripting.Dictionary")
+            d("name") = arr(i).Name
+            d("table") = arr(i).Table
+            d("foreignTable") = arr(i).ForeignTable
+            ' pares campo->campo
+            Dim rf, pairs: pairs = ""
+            For Each rf In arr(i).Fields
+                If pairs <> "" Then pairs = pairs & ", "
+                pairs = pairs & rf.Name & " -> " & rf.ForeignName
+            Next
+            d("fieldPairs") = pairs
+            Set out(count) = d
+            count = count + 1
+        Next
+        If count > 0 Then
+            ReDim Preserve out(count-1)
+            DescribeRelationsArray = out
+            Exit Function
+        End If
+    End If
+    DescribeRelationsArray = Array()
+End Function
+
+' Función para guardar esquema en formato Markdown
+Sub SaveSchemaAsMarkdown(schema, filePath)
+    On Error Resume Next
+    Dim s, tName, tinfo, fName, finfo, i, rel, fields
+
+    s = "# Esquema de base de datos" & vbCrLf & vbCrLf
+
+    For Each tName In schema.Keys
+        Set tinfo = schema(tName)
+        s = s & "## Tabla: " & tName & vbCrLf
+        If tinfo.Exists("primaryKey") And tinfo("primaryKey") <> "" Then
+            s = s & "- **PK:** " & tinfo("primaryKey") & vbCrLf
+        End If
+        s = s & vbCrLf & "| Campo | Tipo | Tamano | Requerido | Defecto |" & vbCrLf
+        s = s & "|---|---|---:|:---:|---|" & vbCrLf
+
+        If tinfo.Exists("fields") Then
+            Set fields = tinfo("fields")
+            If gDebug Then LogMessage "Procesando campos de " & tName & ", total: " & fields.Count
+            If fields.Count > 0 Then
+                Dim fieldKeys: fieldKeys = fields.Keys
+                If gDebug Then LogMessage "Claves de campos obtenidas: " & UBound(fieldKeys) + 1
+                For i = 0 To UBound(fieldKeys)
+                    fName = fieldKeys(i)
+                    Set finfo = fields(fName)
+                    If gDebug Then LogMessage "Procesando campo: " & fName & " - Tipo objeto: " & TypeName(finfo)
+                    
+                    Dim fieldType, fieldSize, fieldRequired
+                    fieldType = ""
+                    fieldSize = ""
+                    fieldRequired = False
+                    
+                    On Error Resume Next
+                    fieldType = finfo("type")
+                    fieldSize = finfo("size")
+                    fieldRequired = finfo("required")
+                    On Error GoTo 0
+                    
+                    If gDebug Then LogMessage "Valores obtenidos - Tipo: " & fieldType & ", Tamaño: " & fieldSize & ", Requerido: " & fieldRequired
+                    
+                    Dim defVal: defVal = ""
+                     If finfo.Exists("defaultValue") Then defVal = finfo("defaultValue")
+                     Dim requiredText: requiredText = "No"
+                     If fieldRequired Then requiredText = "Si"
+                     Dim rowText: rowText = "| " & fName & " | " & fieldType & " | " & fieldSize & " | " & requiredText & " | " & defVal & " |" & vbCrLf
+                    s = s & rowText
+                    If gDebug Then LogMessage "Fila agregada: " & Trim(Replace(rowText, vbCrLf, ""))
+                    If gDebug Then LogMessage "Campo procesado: " & fName
+                Next
+            Else
+                If gDebug Then LogMessage "No hay campos en el diccionario para " & tName
+            End If
+        Else
+            If gDebug Then LogMessage "No hay campos para " & tName
+        End If
+
+        ' Relaciones salientes/entrantes
+        s = s & vbCrLf & "**FK (salientes):**" & vbCrLf
+        If IsArray(tinfo("relationsOut")) And UBound(tinfo("relationsOut")) >= 0 Then
+            For i = 0 To UBound(tinfo("relationsOut"))
+                Set rel = tinfo("relationsOut")(i)
+                s = s & "- " & rel("name") & ": " & tName & " → " & rel("foreignTable") & " (" & rel("fieldPairs") & ")" & vbCrLf
+            Next
+        Else
+            s = s & "- (ninguna)" & vbCrLf
+        End If
+
+        s = s & vbCrLf & "**Referenciada por (entrantes):**" & vbCrLf
+        If IsArray(tinfo("relationsIn")) And UBound(tinfo("relationsIn")) >= 0 Then
+            For i = 0 To UBound(tinfo("relationsIn"))
+                Set rel = tinfo("relationsIn")(i)
+                s = s & "- " & rel("name") & ": " & rel("table") & " → " & tName & " (" & rel("fieldPairs") & ")" & vbCrLf
+            Next
+        Else
+            s = s & "- (ninguna)" & vbCrLf
+        End If
+
+        s = s & vbCrLf
+    Next
+    
+    If gDebug Then LogMessage "Contenido final del Markdown (primeros 500 caracteres): " & Left(s, 500)
+
+    Dim ts: Set ts = CreateObject("ADODB.Stream")
+    ts.Type = 2: ts.Charset = "utf-8": ts.Open
+    ts.WriteText s, 0
+    ts.SaveToFile filePath, 2
+    ts.Close
+    
+    If gDebug Then LogMessage "Archivo Markdown guardado: " & filePath & " (longitud: " & Len(s) & " caracteres)"
+End Sub
+
+' ============================================================================
 ' SECCIÓN 8: FUNCIONES UTILITARIAS
 ' ============================================================================
 
@@ -774,6 +1018,12 @@ Function ResolvePath(path)
     Else
         ResolvePath = gScriptDir & "\" & path
     End If
+End Function
+
+' Función para obtener el nombre de archivo sin extensión
+Function GetFileNameWithoutExtension(filePath)
+    Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
+    GetFileNameWithoutExtension = fso.GetBaseName(filePath)
 End Function
 
 ' ============================================================================
@@ -1852,6 +2102,43 @@ Sub Main()
                 ShowHelp
             End If
             
+        Case "schema"
+            ' Parseo simple de opciones
+            Dim dbArg, tableOpt, outOpt, fmtOpt, k
+            dbArg = ""
+            tableOpt = ""
+            outOpt = ""
+            fmtOpt = "json"
+            ' argumentos posicionales/flags
+            For k = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k))
+                    Case "--table": If k < cleanArgCount - 1 Then tableOpt = cleanArgs(k+1): k = k + 1
+                    Case "--out":   If k < cleanArgCount - 1 Then outOpt   = cleanArgs(k+1): k = k + 1
+                    Case "--format":If k < cleanArgCount - 1 Then fmtOpt   = LCase(cleanArgs(k+1)): k = k + 1
+                    Case Else
+                        If dbArg = "" Then dbArg = cleanArgs(k)
+                End Select
+            Next
+            ' db por defecto desde .ini
+            If dbArg = "" Then
+                Set config = LoadConfig(gConfigPath)
+                dbArg = config("DATABASE_DefaultPath")
+            End If
+            gDbPath = ResolvePath(dbArg)
+            If outOpt = "" Then 
+                ' Extraer nombre de la base de datos sin extensión
+                Dim dbName: dbName = GetFileNameWithoutExtension(gDbPath)
+                outOpt = gScriptDir & "\output\schema\" & dbName
+            End If
+            CreateFolderRecursive outOpt
+            If fmtOpt <> "json" And fmtOpt <> "md" Then fmtOpt = "json"
+
+            If Not ExportSchema(gDbPath, tableOpt, outOpt, fmtOpt) Then
+                WScript.Echo "Error: no se pudo exportar el esquema"
+                WScript.Quit 1
+            End If
+            WScript.Quit 0
+            
         Case "test"
             RunTests
             
@@ -2012,11 +2299,11 @@ Function UpdateModules(dbPath, modulesArg)
     On Error Resume Next
     app.RunCommand acCmdCompileAndSaveAllModules
     If Err.Number <> 0 Then
-        LogMessage "update: advertencia en compilación: " & Err.Description
+        LogMessage "update: aviso al compilar: " & Err.Description
         Err.Clear
-    Else
-        If gVerbose Then LogMessage "update: compilación y guardado completados"
+        ' Fallback: no intentes ningún otro RunCommand; continúa al cierre
     End If
+    On Error GoTo 0
     
     ' Cierre IGUAL que rebuild
     CloseAccess app
