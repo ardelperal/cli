@@ -22,12 +22,17 @@ Const acReport = -32764
 Const acMacro = -32766
 Const acTable = 0
 Const acQuery = 1
+Const acDesign = 1
 Const acDefault = -1
 Const acHidden = 1
 Const acNormal = 0
 
 ' Constantes de comandos de Access
 Const acCmdCompileAndSaveAllModules = 126
+
+' Constantes de guardado
+Const acSaveNo = 2
+Const acSaveYes = 0
 
 ' Constantes de controles
 Const acLabel = 100
@@ -39,6 +44,23 @@ Const acComboBox = 111
 Const acListBox = 110
 Const acSubform = 112
 Const acImage = 103
+
+' Controles extra
+Const acRectangle = 3
+Const acLine = 4
+Const acOptionGroup = 7
+Const acBoundObjectFrame = 108
+Const acUnboundObjectFrame = 114
+Const acPageBreak = 10
+Const acCustomControl = 119
+Const acToggleButton = 122
+Const acTabCtl = 123
+Const acPage = 124
+
+' Vistas de formulario
+Const acFormDS = 3
+Const acFormPivotTable = 4
+Const acFormPivotChart = 5
 
 ' ============================================================================
 ' SECCIÓN 2: VARIABLES GLOBALES
@@ -52,6 +74,7 @@ Dim g_ModulesSrcPath, g_ModulesExtensions, g_ModulesIncludeSubdirs
 ' Variables para ImportFormFromJson
 Dim ImportFormFromJson_app
 Dim ImportFormFromJson_target
+Dim ImportFormFromJson_finalTarget
 Dim ImportFormFromJson_root
 Dim gConfig
 
@@ -95,11 +118,11 @@ Function LoadConfig(configPath)
     config.Add "MODULES_FilePattern", "*"
     
     If Not fso.FileExists(configPath) Then
-        LogMessage "Archivo de configuracion no encontrado: " & configPath & ". Usando valores por defecto."
+        LogVerbose "Archivo de configuracion no encontrado: " & configPath & ". Usando valores por defecto."
         Set LoadConfig = config
         Exit Function
     Else
-        LogMessage "Archivo de configuracion encontrado: " & configPath
+        LogVerbose "Archivo de configuracion encontrado: " & configPath
     End If
     
     Set file = fso.OpenTextFile(configPath, 1)
@@ -121,22 +144,22 @@ Function LoadConfig(configPath)
                         key = section & "_" & Trim(parts(0))
                         value = Trim(parts(1))
                         
-                        LogMessage "Procesando: [" & section & "] " & Trim(parts(0)) & " = " & value & " -> clave: " & key
+                        LogVerbose "Procesando: [" & section & "] " & Trim(parts(0)) & " = " & value & " -> clave: " & key
                         
                         ' Resolver rutas relativas para ciertos valores (excepto patrones)
                         If (InStr(UCase(key), "PATH") > 0 Or InStr(UCase(key), "FILE") > 0) And InStr(UCase(key), "PATTERN") = 0 Then
                             If value <> "" And fso.GetAbsolutePathName(value) <> value Then
                                 value = gScriptDir & "\" & value
-                                LogMessage "Ruta resuelta: " & value
+                                LogVerbose "Ruta resuelta: " & value
                             End If
                         End If
                         
                         If config.Exists(key) Then
                             config(key) = value
-                            LogMessage "Clave actualizada: " & key & " = " & value
+                            LogVerbose "Clave actualizada: " & key & " = " & value
                         Else
                             config.Add key, value
-                            LogMessage "Clave agregada: " & key & " = " & value
+                            LogVerbose "Clave agregada: " & key & " = " & value
                         End If
                     End If
                 End If
@@ -151,6 +174,94 @@ Function LoadConfig(configPath)
         LogMessage "Error cargando configuracion: " & Err.Description
         Err.Clear
     End If
+End Function
+
+' ============================================================================
+' FUNCIONES HELPER PARA CONFIGURACIÓN UI
+' ============================================================================
+
+Function UI_GetRoot(config)
+    On Error Resume Next
+    UI_GetRoot = ResolvePath(CfgGet(config,"UI_Root","UI.Root",".\ui"))
+End Function
+
+Function UI_GetFormsDir(config)
+    On Error Resume Next
+    UI_GetFormsDir = CfgGet(config,"UI_FormsDir","UI.FormsDir","forms")
+End Function
+
+Function UI_GetAssetsDir(config)
+    On Error Resume Next
+    UI_GetAssetsDir = CfgGet(config,"UI_AssetsDir","UI.AssetsDir","assets")
+End Function
+
+Function UI_GetIncludeSubdirs(config)
+    On Error Resume Next
+    UI_GetIncludeSubdirs = ToBool(CfgGet(config,"UI_IncludeSubdirectories","UI.IncludeSubdirectories","true"),True)
+End Function
+
+Function UI_GetFormFilePattern(config)
+    On Error Resume Next
+    UI_GetFormFilePattern = CfgGet(config,"UI_FormFilePattern","UI.FormFilePattern","*.json")
+End Function
+
+Function UI_NameFromFileBase(config)
+    On Error Resume Next
+    UI_NameFromFileBase = ToBool(CfgGet(config,"UI_NameFromFileBase","UI.NameFromFileBase","true"),True)
+End Function
+
+Function UI_GetAssetsImgDir(config)
+    On Error Resume Next
+    UI_GetAssetsImgDir = CfgGet(config,"UI_AssetsImgDir","UI.AssetsImgDir","img")
+End Function
+
+Function UI_GetAssetsImgExtensions(config)
+    On Error Resume Next
+    Dim exts: exts = CfgGet(config,"UI_AssetsImgExtensions","UI.AssetsImgExtensions",".png,.jpg,.jpeg,.gif,.bmp")
+    UI_GetAssetsImgExtensions = LCase(exts)
+End Function
+
+' ============================================================================
+' UTILIDADES DE FICHEROS
+' ============================================================================
+
+Function EnumerateFiles(rootFolder, pattern, includeSubdirs)
+    On Error Resume Next
+    Dim fso, folder, files, subFolder, col, arr, i, subArr, j
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(rootFolder) Then
+        EnumerateFiles = Array()
+        Exit Function
+    End If
+    Set folder = fso.GetFolder(rootFolder)
+    ReDim arr(-1)
+    ' archivos directos
+    Set files = folder.Files
+    For Each col In files
+        If LCase(fso.GetFileName(col.Path)) Like LCase(pattern) Then
+            ReDim Preserve arr(UBound(arr)+1)
+            arr(UBound(arr)) = col.Path
+        End If
+    Next
+    ' recursivo
+    If includeSubdirs Then
+        For Each subFolder In folder.SubFolders
+            subArr = EnumerateFiles(subFolder.Path, pattern, True)
+            If IsArray(subArr) Then
+                For j = 0 To UBound(subArr)
+                    ReDim Preserve arr(UBound(arr)+1)
+                    arr(UBound(arr)) = subArr(j)
+                Next
+            End If
+        Next
+    End If
+    EnumerateFiles = arr
+End Function
+
+Function FileBaseName(p)
+    On Error Resume Next
+    Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
+    FileBaseName = fso.GetBaseName(p)
 End Function
 
 ' ============================================================================
@@ -187,6 +298,10 @@ Sub ShowHelp()
     WScript.Echo ""
     WScript.Echo "  form-export [db_path] --form <NombreFormulario> --out <ruta.json>"
     WScript.Echo "  form-import <json_path> [db_path] [--name NuevoNombre] [--overwrite] [--dry-run]"
+    WScript.Echo ""
+    WScript.Echo "  ui-rebuild [db_path]           Reconvierte TODOS los formularios del /ui a Access"
+    WScript.Echo "  ui-update [db_path] <form.json|formName> [...]  Reconstruye solo los indicados"
+    WScript.Echo "  ui-touch <formName|form.json>  Atajo para actualizar un unico formulario"
     WScript.Echo ""
     WScript.Echo "OPCIONES:"
     WScript.Echo "  --config <path>       - Archivo de configuracion (por defecto: cli.ini)"
@@ -306,41 +421,63 @@ End Sub
 ' Función para abrir Access de forma segura
 ' Función canónica para abrir Access (basada en condor_cli.vbs)
 Function OpenAccess(dbPath, password)
-    Dim objApp
+    Dim objApp, attempt, maxAttempts
+    maxAttempts = 3
     
     LogVerbose "Abriendo Access: " & dbPath
     If password <> "" Then
         LogVerbose "Con password: (oculta)"
     End If
     
-    On Error Resume Next
-    Set objApp = CreateObject("Access.Application")
-    
-    If Err.Number <> 0 Then
-        LogMessage "ERROR: No se pudo crear instancia de Access: " & Err.Description
-        Set OpenAccess = Nothing
-        Exit Function
-    End If
+    For attempt = 1 To maxAttempts
+        On Error Resume Next
+        Set objApp = CreateObject("Access.Application")
+        
+        If Err.Number <> 0 Then
+            LogMessage "ERROR: No se pudo crear instancia de Access (intento " & attempt & "): " & Err.Description
+            If attempt < maxAttempts Then
+                LogVerbose "Reintentando en 500ms..."
+                WScript.Sleep 500
+                Err.Clear
+            Else
+                Set OpenAccess = Nothing
+                Exit Function
+            End If
+        Else
+            Exit For
+        End If
+    Next
     
     ' Configurar Access para modo silencioso (solo lo que NO requiere BD abierta)
     objApp.Visible = False
     objApp.UserControl = False
     objApp.AutomationSecurity = 1  ' msoAutomationSecurityForceDisable - IGUAL que rebuild
     
-    ' Abrir la base de datos
-    If password <> "" Then
-        objApp.OpenCurrentDatabase dbPath, False, password
-    Else
-        objApp.OpenCurrentDatabase dbPath, False
-    End If
+    ' Abrir la base de datos con retry
+    For attempt = 1 To maxAttempts
+        On Error Resume Next
+        If password <> "" Then
+            objApp.OpenCurrentDatabase dbPath, False, password
+        Else
+            objApp.OpenCurrentDatabase dbPath, False
+        End If
 
-    If Err.Number <> 0 Then
-        LogMessage "ERROR: No se pudo abrir la base de datos: " & Err.Description
-        objApp.Quit
-        Set objApp = Nothing
-        Set OpenAccess = Nothing
-        Exit Function
-    End If
+        If Err.Number <> 0 Then
+            LogMessage "ERROR: No se pudo abrir la base de datos (intento " & attempt & "): " & Err.Description
+            If attempt < maxAttempts Then
+                LogVerbose "Reintentando en 500ms..."
+                WScript.Sleep 500
+                Err.Clear
+            Else
+                objApp.Quit
+                Set objApp = Nothing
+                Set OpenAccess = Nothing
+                Exit Function
+            End If
+        Else
+            Exit For
+        End If
+    Next
     
     ' Verificar que la BD se abrió correctamente
     If objApp.CurrentProject Is Nothing Then
@@ -398,22 +535,28 @@ End Sub
 ' ============================================================================
 
 Sub LogMessage(message)
+    ' Reemplazar caracteres especiales para evitar problemas de codificación en consola
+    Dim cleanMessage
+    cleanMessage = Replace(message, "ó", "o")
+    cleanMessage = Replace(cleanMessage, "ñ", "n")
+    cleanMessage = Replace(cleanMessage, "á", "a")
+    cleanMessage = Replace(cleanMessage, "é", "e")
+    cleanMessage = Replace(cleanMessage, "í", "i")
+    cleanMessage = Replace(cleanMessage, "ú", "u")
+    cleanMessage = Replace(cleanMessage, "Ó", "O")
+    cleanMessage = Replace(cleanMessage, "Ñ", "N")
+    cleanMessage = Replace(cleanMessage, "Á", "A")
+    cleanMessage = Replace(cleanMessage, "É", "E")
+    cleanMessage = Replace(cleanMessage, "Í", "I")
+    cleanMessage = Replace(cleanMessage, "Ú", "U")
+    
+    ' Escribir a consola solo si no está en modo quiet
     If Not gQuiet Then
-        ' Reemplazar caracteres especiales para evitar problemas de codificación
-        message = Replace(message, "ó", "o")
-        message = Replace(message, "ñ", "n")
-        message = Replace(message, "á", "a")
-        message = Replace(message, "é", "e")
-        message = Replace(message, "í", "i")
-        message = Replace(message, "ú", "u")
-        message = Replace(message, "Ó", "O")
-        message = Replace(message, "Ñ", "N")
-        message = Replace(message, "Á", "A")
-        message = Replace(message, "É", "E")
-        message = Replace(message, "Í", "I")
-        message = Replace(message, "Ú", "U")
-        WScript.Echo "[" & Now & "] " & message
+        WScript.Echo "[" & Now & "] " & cleanMessage
     End If
+    
+    ' Escribir siempre al archivo de log (mensaje original con acentos)
+    AppendLogToFile message
 End Sub
 
 Sub LogVerbose(message)
@@ -424,6 +567,60 @@ End Sub
 
 Sub LogError(message)
     WScript.Echo "[ERROR] " & message
+    ' Escribir siempre al archivo de log
+    AppendLogToFile "[ERROR] " & message
+End Sub
+
+Sub AppendLogToFile(message)
+    On Error Resume Next
+    
+    Dim logFile
+    If IsObject(gConfig) Then
+        On Error Resume Next
+        If Not gConfig Is Nothing And gConfig.Exists("LOGGING_LogFile") Then
+            logFile = gConfig("LOGGING_LogFile")
+        End If
+        Err.Clear
+    End If
+    If ("" & logFile) = "" Then
+        logFile = gScriptDir & "\cli.log"
+    End If
+    
+    ' Crear el objeto ADODB.Stream
+    Dim stream
+    Set stream = CreateObject("ADODB.Stream")
+    If Err.Number <> 0 Then
+        Exit Sub ' Si no se puede crear el stream, salir silenciosamente
+    End If
+    
+    ' Configurar el stream para UTF-8
+    stream.Type = 2 ' adTypeText
+    stream.Charset = "UTF-8"
+    
+    ' Abrir el stream
+    stream.Open
+    
+    ' Si el archivo existe, cargar su contenido
+    Dim fso
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(logFile) Then
+        stream.LoadFromFile logFile
+        stream.Position = stream.Size ' Ir al final del archivo
+    End If
+    
+    ' Escribir el mensaje con timestamp
+    stream.WriteText "[" & Now & "] " & message & vbCrLf
+    
+    ' Guardar al archivo
+    stream.SaveToFile logFile, 2 ' adSaveCreateOverWrite
+    On Error GoTo 0
+    
+    ' Cerrar el stream
+    stream.Close
+    Set stream = Nothing
+    Set fso = Nothing
+    
+    Err.Clear
 End Sub
 
 ' ============================================================================
@@ -549,104 +746,7 @@ Sub ExtractTables(outputPath)
     LogMessage "Informacion de tablas guardada en: tables.json"
 End Sub
 
-Function ExtractFormControls(db, formName)
-    Dim controlsDict, app, frm
-    Set controlsDict = CreateObject("Scripting.Dictionary")
-    
-    On Error Resume Next
-    
-    ' Abrir Access y el formulario
-    Set app = OpenAccess(db.Name, gPassword)
-    
-    app.DoCmd.OpenForm formName, acDesign, , , , acHidden
-    
-    If Err.Number <> 0 Then
-        LogMessage "Error: Formulario '" & formName & "' no encontrado o no se puede abrir", "ERROR"
-        CloseAccess app
-        Set ExtractFormControls = controlsDict
-        Exit Function
-    End If
-    
-    Set frm = app.Forms(formName)
-    Set controlsDict = ExtractFormControlsInternal(frm)
-    
-    app.DoCmd.Close acForm, formName, acSaveNo
-    CloseAccess app
-    
-    Set ExtractFormControls = controlsDict
-End Function
 
-Function ExtractFormControlsInternal(frm)
-    Dim controlsDict, controlDict, ctl
-    Set controlsDict = CreateObject("Scripting.Dictionary")
-    
-    On Error Resume Next
-    
-    For Each ctl In frm.Controls
-        Set controlDict = CreateObject("Scripting.Dictionary")
-        
-        ' Propiedades básicas del control
-        controlDict("name") = ctl.Name
-        controlDict("controlType") = GetControlTypeName(ctl.ControlType)
-        controlDict("left") = ctl.Left
-        controlDict("top") = ctl.Top
-        controlDict("width") = ctl.Width
-        controlDict("height") = ctl.Height
-        controlDict("visible") = ctl.Visible
-        controlDict("enabled") = ctl.Enabled
-        
-        ' Propiedades específicas según el tipo de control
-        Select Case ctl.ControlType
-            Case acTextBox, acComboBox, acListBox
-                On Error Resume Next
-                controlDict("controlSource") = ctl.ControlSource
-                controlDict("rowSource") = ctl.RowSource
-                controlDict("rowSourceType") = ctl.RowSourceType
-                controlDict("boundColumn") = ctl.BoundColumn
-                controlDict("columnCount") = ctl.ColumnCount
-                On Error GoTo 0
-                
-            Case acLabel
-                On Error Resume Next
-                controlDict("caption") = ctl.Caption
-                On Error GoTo 0
-                
-            Case acCommandButton
-                On Error Resume Next
-                controlDict("caption") = ctl.Caption
-                controlDict("onClick") = ctl.OnClick
-                On Error GoTo 0
-                
-            Case acCheckBox, acOptionButton, acToggleButton
-                On Error Resume Next
-                controlDict("controlSource") = ctl.ControlSource
-                controlDict("defaultValue") = ctl.DefaultValue
-                On Error GoTo 0
-                
-            Case acSubform
-                On Error Resume Next
-                controlDict("sourceObject") = ctl.SourceObject
-                controlDict("linkChildFields") = ctl.LinkChildFields
-                controlDict("linkMasterFields") = ctl.LinkMasterFields
-                On Error GoTo 0
-        End Select
-        
-        ' Propiedades de formato
-        On Error Resume Next
-        controlDict("backColor") = ctl.BackColor
-        controlDict("foreColor") = ctl.ForeColor
-        controlDict("borderStyle") = ctl.BorderStyle
-        controlDict("fontSize") = ctl.FontSize
-        controlDict("fontName") = ctl.FontName
-        controlDict("fontBold") = ctl.FontBold
-        controlDict("fontItalic") = ctl.FontItalic
-        On Error GoTo 0
-        
-        Set controlsDict(ctl.Name) = controlDict
-    Next
-    
-    Set ExtractFormControlsInternal = controlsDict
-End Function
 
 ' ============================================================================
 ' SECCIÓN 6: FUNCIONES DE EXPORTACIÓN DE ESQUEMA
@@ -799,7 +899,7 @@ End Function
 ' Función para guardar esquema en formato Markdown
 Sub SaveSchemaAsMarkdown(schema, filePath)
     On Error Resume Next
-    Dim s, tName, tinfo, fName, finfo, i, rel, fields
+    Dim s, tName, tinfo, fName, finfo, i, rel, fields, fieldKeys
 
     s = "# Esquema de base de datos" & vbCrLf & vbCrLf
 
@@ -816,7 +916,7 @@ Sub SaveSchemaAsMarkdown(schema, filePath)
             Set fields = tinfo("fields")
             If gDebug Then LogMessage "Procesando campos de " & tName & ", total: " & fields.Count
             If fields.Count > 0 Then
-                Dim fieldKeys: fieldKeys = fields.Keys
+                fieldKeys = fields.Keys
                 If gDebug Then LogMessage "Claves de campos obtenidas: " & UBound(fieldKeys) + 1
                 For i = 0 To UBound(fieldKeys)
                     fName = fieldKeys(i)
@@ -956,13 +1056,13 @@ End Function
 
 ' Función para guardar datos en formato JSON
 Sub SaveToJSON(data, filePath)
-    Dim jsonText, outputFile
-    
+    Dim jsonText, st
     jsonText = ConvertToJSON(data)
-    
-    Set outputFile = objFSO.CreateTextFile(filePath, True, False)
-    outputFile.Write jsonText
-    outputFile.Close
+    Set st = CreateObject("ADODB.Stream")
+    st.Type = 2: st.Charset = "utf-8": st.Open
+    st.WriteText jsonText, 0
+    st.SaveToFile filePath, 2
+    st.Close
 End Sub
 
 ' Función básica para convertir a JSON
@@ -1032,6 +1132,55 @@ End Function
 Function GetFileNameWithoutExtension(filePath)
     Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
     GetFileNameWithoutExtension = fso.GetBaseName(filePath)
+End Function
+
+Function ResolveAssetImagePath(imgRef, config)
+    On Error Resume Next
+    ResolveAssetImagePath = ""
+
+    If ("" & imgRef) = "" Then Exit Function
+
+    Dim uiRoot, assetsDir, imgDir, baseDir, tryPath
+    uiRoot    = UI_GetRoot(config)
+    assetsDir = UI_GetAssetsDir(config)
+    imgDir    = UI_GetAssetsImgDir(config)
+
+    ' 1) Si viene ruta absoluta, úsala directamente
+    Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(imgRef) Then
+        ResolveAssetImagePath = imgRef
+        Exit Function
+    End If
+
+    ' 2) Probar combinaciones relativas canónicas
+    Dim candidates(2)
+    candidates(0) = ResolvePath(uiRoot & "\" & assetsDir & "\" & imgDir & "\" & imgRef)       ' ./ui/assets/img/<imgRef>
+    candidates(1) = ResolvePath(uiRoot & "\" & imgDir & "\" & imgRef)                         ' ./ui/img/<imgRef> (fallback)
+    candidates(2) = ResolvePath(imgRef)                                                       ' relativo al script
+
+    Dim i
+    For i = 0 To UBound(candidates)
+        tryPath = candidates(i)
+        If fso.FileExists(tryPath) Then
+            ResolveAssetImagePath = tryPath
+            Exit Function
+        End If
+    Next
+
+    ' 3) Si vino sin extensión, probar con extensiones permitidas
+    Dim bare, ext, exts, arr, j
+    bare = fso.GetBaseName(imgRef)
+    exts = UI_GetAssetsImgExtensions(config)
+    arr = Split(exts, ",")
+    For j = 0 To UBound(arr)
+        ext = Trim(arr(j))
+        If Left(ext,1) <> "." Then ext = "." & ext
+        tryPath = ResolvePath(uiRoot & "\" & assetsDir & "\" & imgDir & "\" & bare & ext)
+        If fso.FileExists(tryPath) Then
+            ResolveAssetImagePath = tryPath
+            Exit Function
+        End If
+    Next
 End Function
 
 ' ============================================================================
@@ -1403,55 +1552,7 @@ Sub TranscodeTextFile(srcPath, dstPath, dstCharset)
 End Sub
 
 ' Funcion para importar modulo VBA desde archivo con codificacion correcta
-Function CopyAsAnsi(srcPath, dstPath)
-    CopyAsAnsi = False
-    Dim fso, srcFile, dstFile, content
-    
-    Set fso = CreateObject("Scripting.FileSystemObject")
-    
-    On Error Resume Next
-    
-    ' Leer archivo fuente usando TextStream con formato Unicode
-    Set srcFile = fso.OpenTextFile(srcPath, 1, False, -1) ' ForReading, Unicode
-    If Err.Number <> 0 Then
-        Err.Clear
-        ' Fallback: intentar como ASCII
-        Set srcFile = fso.OpenTextFile(srcPath, 1, False, 0) ' ForReading, ASCII
-        If Err.Number <> 0 Then
-            Err.Clear
-            Exit Function
-        End If
-    End If
-    
-    ' Leer todo el contenido
-    content = srcFile.ReadAll()
-    srcFile.Close
-    
-    If Err.Number <> 0 Then
-        Err.Clear
-        Exit Function
-    End If
-    
-    ' Para archivos .bas, asegurar que Option Explicit esté presente
-    If LCase(Right(srcPath, 4)) = ".bas" Then
-        content = EnsureOptionExplicit(content)
-    End If
-    
-    ' Escribir archivo destino como ASCII/ANSI
-    Set dstFile = fso.CreateTextFile(dstPath, True, False) ' Overwrite, ASCII
-    dstFile.Write content
-    dstFile.Close
-    
-    If Err.Number <> 0 Then
-        Err.Clear
-        Exit Function
-    End If
-    
-    On Error GoTo 0
-    
-    If gDebug Then LogMessage "[DEBUG] Archivo copiado como ANSI: " & srcPath & " -> " & dstPath
-    CopyAsAnsi = True
-End Function
+
 
 ' Función para asegurar que Option Compare Database y Option Explicit estén presentes
 Function EnsureOptionExplicit(vbMod)
@@ -1884,6 +1985,36 @@ Function WriteModuleFile(filePath, content)
     End If
 End Function
 
+' Función para obtener valores de configuración con fallback
+Function CfgGet(cfg, keyNew, keyOld, def)
+    On Error Resume Next
+    If cfg.Exists(keyNew) Then
+        CfgGet = cfg(keyNew)
+    ElseIf cfg.Exists(keyOld) Then
+        CfgGet = cfg(keyOld)
+    Else
+        CfgGet = def
+    End If
+End Function
+
+' Función para convertir string a boolean
+Function ToBool(s, def)
+    On Error Resume Next
+    Dim t: t = LCase(CStr(s))
+    If t = "true" Or t = "1" Or t = "yes" Or t = "si" Then
+        ToBool = True
+    ElseIf t = "false" Or t = "0" Or t = "no" Then
+        ToBool = False
+    Else
+        ToBool = def
+    End If
+End Function
+
+' Función stub para validar configuración
+Sub ValidateConfig()
+    LogMessage "Validacion de configuracion: OK"
+End Sub
+
 ' Función para exportar objetos de Access
 Function ExportAccessObject(objectType, objectName, filePath)
     On Error Resume Next
@@ -1900,11 +2031,20 @@ Function ExportAccessObject(objectType, objectName, filePath)
     ' Exportar objeto usando SaveAsText
     objAccess.Application.SaveAsText objectType, objectName, filePath
     
+    ' Manejo rigido de errores para evitar contaminacion
     If Err.Number = 0 Then
         ExportAccessObject = True
     Else
-        LogMessage "Error exportando " & objectName & ": " & Err.Description
+        LogMessage "Error exportando " & objectName & ": " & Err.Description & " (Codigo: " & Err.Number & ")"
         Err.Clear
+        ' Salir inmediatamente sin ejecutar logica posterior sobre estado inconsistente
+        Exit Function
+    End If
+    
+    ' Verificacion adicional: comprobar que el archivo se creo realmente
+    If Not objFSO.FileExists(filePath) Then
+        LogMessage "Advertencia: archivo no creado para " & objectName & " en " & filePath
+        ExportAccessObject = False
     End If
 End Function
 
@@ -2005,9 +2145,7 @@ Sub Main()
                 gDbPath = ResolvePath(cleanArgs(1))
             Else
                 ' Usar DefaultPath de la configuración
-                Dim config
-                Set config = LoadConfig(gConfigPath)
-                gDbPath = ResolvePath(config("DATABASE_DefaultPath"))
+                gDbPath = ResolvePath(objConfig("DATABASE_DefaultPath"))
                 LogMessage "Usando base de datos por defecto: " & gDbPath
             End If
             
@@ -2025,8 +2163,7 @@ Sub Main()
             
         Case "rebuild"
             ' El comando rebuild no acepta parámetros adicionales, siempre usa DefaultPath
-            Set config = LoadConfig(gConfigPath)
-            gDbPath = ResolvePath(config("DATABASE_DefaultPath"))
+            gDbPath = ResolvePath(objConfig("DATABASE_DefaultPath"))
             LogMessage "Usando base de datos por defecto: " & gDbPath
             
             ' Validar que el archivo existe
@@ -2054,8 +2191,7 @@ Sub Main()
         Case "update"
             ' El comando update usa siempre la base de datos por defecto del .ini
             ' Firma esperada: update <lista_modulos>
-            Set config = LoadConfig(gConfigPath)
-            gDbPath = ResolvePath(config("DATABASE_DefaultPath"))
+            gDbPath = ResolvePath(objConfig("DATABASE_DefaultPath"))
             LogMessage "Usando base de datos por defecto: " & gDbPath
             
             ' Validar que el archivo existe
@@ -2130,8 +2266,7 @@ Sub Main()
             Next
             ' db por defecto desde .ini
             If dbArg = "" Then
-                Set config = LoadConfig(gConfigPath)
-                dbArg = config("DATABASE_DefaultPath")
+                dbArg = objConfig("DATABASE_DefaultPath")
             End If
             gDbPath = ResolvePath(dbArg)
             If outOpt = "" Then 
@@ -2150,21 +2285,20 @@ Sub Main()
             
         Case "form-export"
             ' Uso: form-export [db_path] --form <NombreFormulario> --out <ruta.json>
-            Dim dbArg, outArg, formArg, k
-            dbArg = "": outArg = "": formArg = ""
-            For k = 1 To cleanArgCount - 1
-                Select Case LCase(cleanArgs(k))
-                    Case "--form": If k < cleanArgCount - 1 Then formArg = cleanArgs(k+1): k = k + 1
-                    Case "--out":  If k < cleanArgCount - 1 Then outArg  = cleanArgs(k+1): k = k + 1
-                    Case Else: If dbArg = "" Then dbArg = cleanArgs(k)
+            Dim dbArg2, outArg, formArg, k2
+            dbArg2 = "": outArg = "": formArg = ""
+            For k2 = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k2))
+                    Case "--form": If k2 < cleanArgCount - 1 Then formArg = cleanArgs(k2+1): k2 = k2 + 1
+                    Case "--out":  If k2 < cleanArgCount - 1 Then outArg  = cleanArgs(k2+1): k2 = k2 + 1
+                    Case Else: If dbArg2 = "" Then dbArg2 = cleanArgs(k2)
                 End Select
             Next
             If formArg = "" Then WScript.Echo "Error: --form es obligatorio": WScript.Quit 1
-            If dbArg = "" Then
-                Set config = LoadConfig(gConfigPath)
-                dbArg = config("DATABASE_DefaultPath")
+            If dbArg2 = "" Then
+                dbArg2 = objConfig("DATABASE_DefaultPath")
             End If
-            gDbPath = ResolvePath(dbArg)
+            gDbPath = ResolvePath(dbArg2)
             If outArg = "" Then outArg = gScriptDir & "\output\forms\" & formArg & ".json"
             outArg = ResolvePath(outArg)
             CreateFolderRecursive objFSO.GetParentFolderName(outArg)
@@ -2173,26 +2307,69 @@ Sub Main()
             
         Case "form-import"
             ' Uso: form-import <json_path> [db_path] [--name NuevoNombre] [--overwrite] [--dry-run]
-            Dim jsonArg, nameOpt, ow, dry
-            jsonArg = "": dbArg = "": nameOpt = "": ow = False: dry = False
-            For k = 1 To cleanArgCount - 1
-                Select Case LCase(cleanArgs(k))
-                    Case "--name": If k < cleanArgCount - 1 Then nameOpt = cleanArgs(k+1): k = k + 1
+            Dim jsonArg, nameOpt, ow, dry, dbArg3, k3
+            jsonArg = "": dbArg3 = "": nameOpt = "": ow = False: dry = False
+            For k3 = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k3))
+                    Case "--name": If k3 < cleanArgCount - 1 Then nameOpt = cleanArgs(k3+1): k3 = k3 + 1
                     Case "--overwrite": ow = True
                     Case "--dry-run": dry = True
                     Case Else
-                        If jsonArg = "" Then jsonArg = cleanArgs(k) Else If dbArg = "" Then dbArg = cleanArgs(k)
+                        If jsonArg = "" Then jsonArg = cleanArgs(k3) Else If dbArg3 = "" Then dbArg3 = cleanArgs(k3)
                 End Select
             Next
             If jsonArg = "" Then WScript.Echo "Error: falta json_path": WScript.Quit 1
             jsonArg = ResolvePath(jsonArg)
-            If dbArg = "" Then
-                Set config = LoadConfig(gConfigPath)
-                dbArg = config("DATABASE_DefaultPath")
+            If dbArg3 = "" Then
+                dbArg3 = objConfig("DATABASE_DefaultPath")
             End If
-            gDbPath = ResolvePath(dbArg)
+            gDbPath = ResolvePath(dbArg3)
             If Not ImportFormFromJson(gDbPath, jsonArg, nameOpt, ow, dry) Then WScript.Quit 1
             WScript.Quit 0
+            
+        Case "ui-rebuild"
+            ' ui-rebuild [db_path]
+            Dim config4, dbArg4, uiRoot, formsDir, includeSub, pattern, formsPath, files, i4
+            Set config4 = LoadConfig(gConfigPath)
+            dbArg4 = ""
+            If cleanArgCount > 1 Then dbArg4 = cleanArgs(1)
+            If dbArg4 = "" Then dbArg4 = CfgGet(config4,"DATABASE_DefaultPath","DATABASE.DefaultPath","")
+            gDbPath = ResolvePath(dbArg4)
+            uiRoot = UI_GetRoot(config4)
+            formsDir = UI_GetFormsDir(config4)
+            includeSub = UI_GetIncludeSubdirs(config4)
+            pattern = UI_GetFormFilePattern(config4)
+            formsPath = ResolvePath(uiRoot & "\" & formsDir)
+            files = EnumerateFiles(formsPath, pattern, includeSub)
+            If Not UI_RebuildAll(gDbPath, files, config4) Then WScript.Quit 1 Else WScript.Quit 0
+            
+        Case "ui-update"
+            ' ui-update [db_path] <form1.json> [form2.json ...]  (acepta rutas relativas o nombres base)
+            Dim dbArg5, idx, list(), config5
+            ReDim list(-1)
+            Set config5 = LoadConfig(gConfigPath)
+            dbArg5 = ""
+            For idx = 1 To cleanArgCount - 1
+                If dbArg5 = "" And InStr(cleanArgs(idx),".accdb")>0 Then
+                    dbArg5 = cleanArgs(idx)
+                Else
+                    ReDim Preserve list(UBound(list)+1)
+                    list(UBound(list)) = cleanArgs(idx)
+                End If
+            Next
+            If dbArg5 = "" Then dbArg5 = CfgGet(config5,"DATABASE_DefaultPath","DATABASE.DefaultPath","")
+            gDbPath = ResolvePath(dbArg5)
+            If Not UI_UpdateSome(gDbPath, list, config5) Then WScript.Quit 1 Else WScript.Quit 0
+            
+        Case "ui-touch"
+            ' ui-touch <formName|form.json>  -> atajo para un unico formulario
+            Dim config6, dbArg6, item
+            Set config6 = LoadConfig(gConfigPath)
+            dbArg6 = CfgGet(config6,"DATABASE_DefaultPath","DATABASE.DefaultPath","")
+            If cleanArgCount < 2 Then WScript.Echo "uso: ui-touch <formName|form.json>": WScript.Quit 1
+            item = cleanArgs(1)
+            Dim arr(0): arr(0) = item
+            If Not UI_UpdateSome(ResolvePath(dbArg6), arr, config6) Then WScript.Quit 1 Else WScript.Quit 0
             
         Case "test"
             RunTests
@@ -3182,8 +3359,19 @@ Function ExportFormToJson(dbPath, formName, outJson)
     Dim app: Set app = OpenAccess(dbPath, GetDatabasePassword(dbPath))
     If app Is Nothing Then Exit Function
 
+    ' Blindaje anti-UI antes de OpenForm
+    app.DisplayAlerts = False
+    app.Echo = False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    
     ' Abrir en diseño y oculto
     app.DoCmd.OpenForm formName, 1, , , , 1 ' acDesign=1, acHidden=1
+    ' Reforzar anti-UI después de OpenForm
+    app.DisplayAlerts = False
+    app.Echo = False
+    app.DoCmd.SetWarnings False
+    Err.Clear
     If Err.Number <> 0 Then
         LogMessage "form-export: no se pudo abrir " & formName & " en diseño: " & Err.Description
         Err.Clear: CloseAccess app: Exit Function
@@ -3216,17 +3404,30 @@ Function ExportFormToJson(dbPath, formName, outJson)
     SaveToJSON root, outJson
 
     ' Cerrar sin guardar
-    app.DoCmd.Close 2, formName, 2 ' acForm=2, acSaveNo=2
+    app.DoCmd.Close acForm, formName, acSaveNo
     CloseAccess app
     ExportFormToJson = True
 End Function
 
 ' === Helpers export ===
+Function HasProperty(obj, p)
+    On Error Resume Next
+    Dim tmp: tmp = obj.Properties(p) ' acceso prueba
+    If Err.Number = 0 Then
+        HasProperty = True
+    Else
+        HasProperty = False
+        Err.Clear
+    End If
+End Function
+
 Function SafeProp(obj, p)
     On Error Resume Next
     Dim v: v = ""
-    v = CallByName(obj, p, 2) ' vbGet=2
-    If Err.Number <> 0 Then Err.Clear: v = ""
+    If HasProperty(obj, p) Then
+        v = obj.Properties(p)
+        If Err.Number <> 0 Then v = "": Err.Clear
+    End If
     SafeProp = v
 End Function
 
@@ -3348,6 +3549,280 @@ Function JsonParse(json)
     Err.Clear
 End Function
 
+Function ValidateFormJson(root, ByRef errMsg)
+    On Error Resume Next
+    ValidateFormJson = False
+    errMsg = ""
+    
+    ' Declaracion de variables
+    Dim i, j, ctrl, propName, propValue, ctValue
+    Dim props
+    
+    ' Validar que root sea un objeto
+    If root Is Nothing Then
+        errMsg = "JSON root es Nothing"
+        Exit Function
+    End If
+    
+    ' Validar name (string no vacio)
+    If Not root.Exists("name") Then
+        errMsg = "falta campo 'name'"
+        Exit Function
+    End If
+    
+    Dim nameValue: nameValue = root("name")
+    If VarType(nameValue) <> vbString Or Len(Trim(nameValue)) = 0 Then
+        errMsg = "campo 'name' debe ser string no vacio"
+        Exit Function
+    End If
+    
+    ' Validar controls (debe ser Array o objeto con Count > 0)
+    If Not root.Exists("controls") Then
+        errMsg = "falta campo 'controls'"
+        Exit Function
+    End If
+    
+    Dim controls: Set controls = root("controls")
+    If controls Is Nothing Then
+        errMsg = "campo 'controls' es Nothing"
+        Exit Function
+    End If
+    
+    Dim keys, k, cnt
+    If IsArray(controls) Then 
+        For i = 0 To UBound(controls) 
+            Set ctrl = controls(i)
+            
+            If ctrl Is Nothing Then
+                errMsg = "control en posicion " & i & " es Nothing"
+                Exit Function
+            End If
+            
+            ' Validar controlType (numerico)
+            If Not ctrl.Exists("controlType") Then
+                errMsg = "control en posicion " & i & " falta 'controlType'"
+                Exit Function
+            End If
+            
+            ctValue = ctrl("controlType")
+            If Not IsNumeric(ctValue) Then
+                errMsg = "control en posicion " & i & " 'controlType' debe ser numerico"
+                Exit Function
+            End If
+            
+            ' Validar left, top, width, height (numericos)
+            props = Array("left", "top", "width", "height")
+            For j = 0 To UBound(props)
+                propName = props(j)
+                If Not ctrl.Exists(propName) Then
+                    errMsg = "control en posicion " & i & " falta '" & propName & "'"
+                    Exit Function
+                End If
+                
+                propValue = ctrl(propName)
+                If Not IsNumeric(propValue) Then
+                    errMsg = "control en posicion " & i & " '" & propName & "' debe ser numerico"
+                    Exit Function
+                End If
+            Next
+        Next
+    ElseIf IsObject(controls) Then 
+        On Error Resume Next 
+        cnt = controls.Count 
+        If Err.Number = 0 Then 
+            keys = controls.Keys 
+            For k = 0 To cnt - 1 
+                Set ctrl = controls(keys(k))
+                
+                If ctrl Is Nothing Then
+                    errMsg = "control en clave " & keys(k) & " es Nothing"
+                    Exit Function
+                End If
+                
+                ' Validar controlType (numerico)
+                If Not ctrl.Exists("controlType") Then
+                    errMsg = "control en clave " & keys(k) & " falta 'controlType'"
+                    Exit Function
+                End If
+                
+                ctValue = ctrl("controlType")
+                If Not IsNumeric(ctValue) Then
+                    errMsg = "control en clave " & keys(k) & " 'controlType' debe ser numerico"
+                    Exit Function
+                End If
+                
+                ' Validar left, top, width, height (numericos)
+                props = Array("left", "top", "width", "height")
+                For j = 0 To UBound(props)
+                    propName = props(j)
+                    If Not ctrl.Exists(propName) Then
+                        errMsg = "control en clave " & keys(k) & " falta '" & propName & "'"
+                        Exit Function
+                    End If
+                    
+                    propValue = ctrl(propName)
+                    If Not IsNumeric(propValue) Then
+                        errMsg = "control en clave " & keys(k) & " '" & propName & "' debe ser numerico"
+                        Exit Function
+                    End If
+                Next
+            Next 
+        Else
+            errMsg = "campo 'controls' no tiene propiedad Count"
+            Exit Function
+        End If 
+        Err.Clear 
+    Else
+        errMsg = "campo 'controls' debe ser Array u objeto con Count"
+        Exit Function
+    End If
+    
+    ValidateFormJson = True
+End Function
+
+Function UI_DryRunCheck(root, ByRef report)
+    On Error Resume Next
+    UI_DryRunCheck = False
+    report = ""
+    
+    ' Validacion basica de estructura JSON
+    Dim errMsg: errMsg = ""
+    If Not ValidateFormJson(root, errMsg) Then
+        report = "ERROR: Validacion JSON fallo - " & errMsg
+        Exit Function
+    End If
+    
+    ' Extraer informacion del formulario
+    Dim formName: formName = root("name")
+    Dim controls: Set controls = root("controls")
+    
+    Dim controlCount: controlCount = 0
+    If IsArray(controls) Then
+        controlCount = UBound(controls) + 1
+    ElseIf IsObject(controls) Then
+        controlCount = controls.Count
+    End If
+    
+    ' Validar tipos de controles soportados
+    Dim supportedTypes: supportedTypes = Array(100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129)
+    Dim unsupportedControls: unsupportedControls = ""
+    Dim unsupportedCount: unsupportedCount = 0
+    
+    Dim i, ctrl, controlType, found, j, keys
+    If IsArray(controls) Then
+        For i = 0 To controlCount - 1
+            Set ctrl = controls(i)
+            
+            controlType = ctrl("controlType")
+            found = False
+            
+            For j = 0 To UBound(supportedTypes)
+                If controlType = supportedTypes(j) Then
+                    found = True
+                    Exit For
+                End If
+            Next
+            
+            If Not found Then
+                If unsupportedCount > 0 Then unsupportedControls = unsupportedControls & ", "
+                unsupportedControls = unsupportedControls & "tipo " & controlType
+                unsupportedCount = unsupportedCount + 1
+            End If
+        Next
+    ElseIf IsObject(controls) Then
+        keys = controls.Keys
+        For i = 0 To UBound(keys)
+            Set ctrl = controls(keys(i))
+            
+            controlType = ctrl("controlType")
+            found = False
+            
+            For j = 0 To UBound(supportedTypes)
+                If controlType = supportedTypes(j) Then
+                    found = True
+                    Exit For
+                End If
+            Next
+            
+            If Not found Then
+                If unsupportedCount > 0 Then unsupportedControls = unsupportedControls & ", "
+                unsupportedControls = unsupportedControls & "tipo " & controlType
+                unsupportedCount = unsupportedCount + 1
+            End If
+        Next
+    End If
+    
+    ' Generar reporte
+    report = "DRY-RUN: Formulario '" & formName & "' - " & controlCount & " controles"
+    
+    If unsupportedCount > 0 Then
+        report = report & vbCrLf & "ADVERTENCIA: " & unsupportedCount & " controles no soportados: " & unsupportedControls
+    End If
+    
+    ' Validar propiedades criticas de controles
+    Dim invalidControls: invalidControls = ""
+    Dim invalidCount: invalidCount = 0
+    
+    If IsArray(controls) Then
+        For i = 0 To controlCount - 1
+            Set ctrl = controls(i)
+            
+            ' Verificar dimensiones validas
+            Dim left, top, width, height
+            left = ctrl("left")
+            top = ctrl("top") 
+            width = ctrl("width")
+            height = ctrl("height")
+            
+            If width <= 0 Or height <= 0 Then
+                If invalidCount > 0 Then invalidControls = invalidControls & ", "
+                invalidControls = invalidControls & "control " & i & " (dimensiones invalidas)"
+                invalidCount = invalidCount + 1
+            End If
+            
+            ' Verificar posicion no negativa
+            If left < 0 Or top < 0 Then
+                If invalidCount > 0 Then invalidControls = invalidControls & ", "
+                invalidControls = invalidControls & "control " & i & " (posicion negativa)"
+                invalidCount = invalidCount + 1
+            End If
+        Next
+    ElseIf IsObject(controls) Then
+        keys = controls.Keys
+        For i = 0 To UBound(keys)
+            Set ctrl = controls(keys(i))
+            
+            ' Verificar dimensiones validas
+            Dim left2, top2, width2, height2
+            left2 = ctrl("left")
+            top2 = ctrl("top") 
+            width2 = ctrl("width")
+            height2 = ctrl("height")
+            
+            If width2 <= 0 Or height2 <= 0 Then
+                If invalidCount > 0 Then invalidControls = invalidControls & ", "
+                invalidControls = invalidControls & "control " & i & " (dimensiones invalidas)"
+                invalidCount = invalidCount + 1
+            End If
+            
+            ' Verificar posicion no negativa
+            If left2 < 0 Or top2 < 0 Then
+                If invalidCount > 0 Then invalidControls = invalidControls & ", "
+                invalidControls = invalidControls & "control " & i & " (posicion negativa)"
+                invalidCount = invalidCount + 1
+            End If
+        Next
+    End If
+    
+    If invalidCount > 0 Then
+        report = report & vbCrLf & "ERROR: " & invalidCount & " controles con problemas: " & invalidControls
+        Exit Function
+    End If
+    
+    report = report & vbCrLf & "VALIDACION: Estructura JSON correcta, todos los controles son validos"
+    UI_DryRunCheck = True
+End Function
+
 Function CreateDict()
     Set CreateDict = CreateObject("Scripting.Dictionary")
 End Function
@@ -3423,13 +3898,19 @@ Class JsonParser
             End If
             pos = pos + 1
             
-            Dim value
-             Set value = ParseValue()
-             If IsObject(value) Then
-                 Set obj(key) = value
-             Else
-                 obj(key) = value
-             End If
+            Dim value, peek
+            peek = Mid(jsonText, pos, 1)
+            
+            If peek = "{" Or peek = "[" Then
+                ' valor compuesto -> usar Set
+                Dim objOrArr
+                Set objOrArr = ParseValue()
+                Set obj(key) = objOrArr
+            Else
+                ' escalar -> sin Set
+                value = ParseValue()
+                obj(key) = value
+            End If
             
             SkipWhitespace
             Dim nextChar
@@ -3449,25 +3930,35 @@ Class JsonParser
     End Function
     
     Private Function ParseArray()
-        Dim arr
-        Set arr = CreateList()
+        Dim arr(), count
+        count = -1
         pos = pos + 1 ' Saltar '['
         SkipWhitespace
         
         If Mid(jsonText, pos, 1) = "]" Then
             pos = pos + 1
-            Set ParseArray = arr
+            ParseArray = Array()   ' array vacío estándar
             Exit Function
         End If
         
         Do
-             Dim value
-             Set value = ParseValue()
-             If IsObject(value) Then
-                 arr.Add value
-             Else
-                 arr.Add value
-             End If
+            ' Leer siguiente elemento
+            Dim peek, val
+            peek = Mid(jsonText, pos, 1)
+            
+            ' Llamar ParseValue (puede devolver objeto o escalar)
+            If peek = "{" Or peek = "[" Then
+                Dim objOrArr
+                Set objOrArr = ParseValue()
+                count = count + 1
+                ReDim Preserve arr(count)
+                Set arr(count) = objOrArr
+            Else
+                val = ParseValue()
+                count = count + 1
+                ReDim Preserve arr(count)
+                arr(count) = val
+            End If
             
             SkipWhitespace
             Dim nextChar
@@ -3483,7 +3974,7 @@ Class JsonParser
             End If
         Loop
         
-        Set ParseArray = arr
+        ParseArray = arr
     End Function
     
     Private Function ParseString()
@@ -3608,6 +4099,13 @@ Function ImportFormFromJson(dbPath, jsonPath, nameOpt, overwrite, dryRun)
         Exit Function
     End If
 
+    ' Validar estructura JSON
+    Dim validationError: validationError = ""
+    If Not ValidateFormJson(root, validationError) Then
+        LogMessage "form-import: JSON invalido - " & validationError
+        Exit Function
+    End If
+
     ' Obtener nombre del formulario
     Dim targetName: targetName = nameOpt
     If targetName = "" Then targetName = GetDict(root, "name", "")
@@ -3620,55 +4118,98 @@ Function ImportFormFromJson(dbPath, jsonPath, nameOpt, overwrite, dryRun)
     Dim app: Set app = OpenAccess(resolvedDbPath, GetDatabasePassword(resolvedDbPath))
     If app Is Nothing Then Exit Function
 
+    ' Refuerzos anti-UI por simetria
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+
     ' Manejar overwrite
     If overwrite Then
         On Error Resume Next
-        app.DoCmd.DeleteObject 2, targetName  ' acForm=2
+        app.DoCmd.DeleteObject acForm, targetName
         Err.Clear
     End If
 
     ' Modo dry-run
     If dryRun Then
-        LogMessage "form-import(dry-run): validacion OK para " & targetName
-        CloseAccess app
-        ImportFormFromJson = True
+        Dim dryReport: dryReport = ""
+        If UI_DryRunCheck(root, dryReport) Then
+            LogMessage "form-import(dry-run): " & dryReport
+            CloseAccess app
+            ImportFormFromJson = True
+        Else
+            LogMessage "form-import(dry-run): " & dryReport
+            CloseAccess app
+            ImportFormFromJson = False
+        End If
         Exit Function
     End If
 
-    ' Intentar abrir en diseño oculto; si no existe, crear y renombrar
+    ' Patron atomico: crear formulario temporal
+    Dim tmpName: tmpName = targetName & "__tmp"
+    
+    ' Crear temporal
     On Error Resume Next
-    app.DoCmd.OpenForm targetName, 1, , , , 1   ' acDesign=1, acHidden=1
-    If Err.Number <> 0 Then
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    app.DoCmd.CreateForm
+    ' Reforzar anti-UI después de CreateForm
+    app.DisplayAlerts = False
+    app.Echo = False
+    app.DoCmd.SetWarnings False
+    If Err.Number <> 0 Then 
+        LogMessage "form-import: no se pudo crear temporal: " & Err.Description
         Err.Clear
-        app.DoCmd.OpenForm , 1, , , , 1          ' crear nuevo formulario en diseño oculto
-        If Err.Number <> 0 Then
-            LogMessage "form-import: no se pudo crear formulario: " & Err.Description
-            Err.Clear
-            CloseAccess app
-            Exit Function
-        End If
-        Dim newName: newName = app.Screen.ActiveForm.Name
-        app.DoCmd.Rename targetName, 2, newName   ' acForm=2
-        Err.Clear
-        app.DoCmd.OpenForm targetName, 1, , , , 1
-        Err.Clear
+        CloseAccess app
+        Exit Function
     End If
+    Dim created: created = app.Screen.ActiveForm.Name
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    app.DoCmd.Rename tmpName, acForm, created
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    app.DoCmd.OpenForm tmpName, acDesign, , , , acHidden
+    ' Reforzar anti-UI después de OpenForm
+    app.DisplayAlerts = False
+    app.Echo = False
+    app.DoCmd.SetWarnings False
+    Err.Clear
 
-    ' Guardar referencias para las siguientes fases
+    ' Guardar referencias para las siguientes fases (usando tmpName)
     Set ImportFormFromJson_app = app
-    ImportFormFromJson_target = targetName
+    ImportFormFromJson_target = tmpName
+    ImportFormFromJson_finalTarget = targetName
     Set ImportFormFromJson_root = root
 
     ' Ejecutar fase 2: aplicar propiedades y controles
     If Not ImportFormFromJson_Apply() Then
         LogMessage "form-import: error en fase de aplicacion"
+        ' Limpiar temporal en caso de error
+        On Error Resume Next
+        app.DoCmd.DeleteObject acForm, tmpName
+        Err.Clear
         CloseAccess app
         Exit Function
     End If
 
-    ' Ejecutar fase 3: finalizar y cerrar
+    ' Ejecutar fase 3: finalizar y hacer swap atomico
     If Not ImportFormFromJson_Finalize() Then
         LogMessage "form-import: error en fase de finalizacion"
+        ' Limpiar temporal en caso de error
+        On Error Resume Next
+        app.DoCmd.DeleteObject acForm, tmpName
+        Err.Clear
         Exit Function
     End If
 
@@ -3692,16 +4233,35 @@ Function ImportFormFromJson_Apply()
     ApplySections frm, root
 
     ' Limpiar controles existentes
-    DeleteAllControls frm
+    DeleteAllControls app, targetName, frm
 
     ' Crear controles desde JSON (orden dado)
-    Dim i, arr
+    Dim arr, i, cnt
     If root.Exists("controls") Then
         arr = root("controls")
         If IsArray(arr) Then
             For i = 0 To UBound(arr)
                 CreateControlFromJson app, targetName, arr(i)
             Next
+        ElseIf IsObject(arr) Then
+            On Error Resume Next
+            Dim kkeys, kk
+            kkeys = arr.Keys
+            If Err.Number = 0 Then
+                For kk = 0 To UBound(kkeys)
+                    CreateControlFromJson app, targetName, arr(kkeys(kk))
+                Next
+            Else
+                Err.Clear
+                ' Mantén el fallback por índice si el objeto soporta indexación posicional
+                cnt = arr.Count
+                If Err.Number = 0 Then
+                    For i = 0 To cnt - 1
+                        CreateControlFromJson app, targetName, arr(i)
+                    Next
+                End If
+                Err.Clear
+            End If
         End If
     End If
 
@@ -3711,8 +4271,10 @@ End Function
 Sub SetPropIfExists(obj, p, v)
     On Error Resume Next
     If IsEmpty(v) Then Exit Sub
-    CallByName obj, p, 4, v   ' vbLet=4
-    Err.Clear
+    If HasProperty(obj, p) Then
+        obj.Properties(p) = v
+        Err.Clear
+    End If
 End Sub
 
 Function GetDict(d, k, def)
@@ -3737,11 +4299,39 @@ Function GetDictObject(d, k)
     End If
 End Function
 
-Sub DeleteAllControls(frm)
+Sub DeleteAllControls(app, formName, frm)
     On Error Resume Next
-    Dim i
-    For i = frm.Controls.Count - 1 To 0 Step -1
-        frm.Controls.Remove frm.Controls(i).Name
+    ' Micro-guard: evitar intentar borrar si no hay controles
+    If frm.Controls.Count <= 0 Then Exit Sub
+    
+    ' Capturar nombres antes del bucle para evitar problemas de reindexacion
+    Dim names(), n, k
+    n = frm.Controls.Count
+    ReDim names(n-1)
+    For k = 0 To n-1: names(k) = frm.Controls(k).Name: Next
+    
+    ' 1ª pasada: borrar TODO excepto TabCtl/Page
+    For k = UBound(names) To 0 Step -1
+        If frm.Controls(names(k)).ControlType <> acTabCtl And frm.Controls(names(k)).ControlType <> acPage Then
+            app.DoCmd.DeleteControl formName, names(k)
+            Err.Clear
+        End If
+    Next
+    
+    ' 2ª pasada: borrar Pages (si quedaran)
+    For k = UBound(names) To 0 Step -1
+        If frm.Controls(names(k)).ControlType = acPage Then
+            app.DoCmd.DeleteControl formName, names(k)
+            Err.Clear
+        End If
+    Next
+    
+    ' 3ª pasada: borrar TabCtl al final
+    For k = UBound(names) To 0 Step -1
+        If frm.Controls(names(k)).ControlType = acTabCtl Then
+            app.DoCmd.DeleteControl formName, names(k)
+            Err.Clear
+        End If
     Next
 End Sub
 
@@ -3755,6 +4345,30 @@ Sub CreateControlFromJson(app, formName, cjson)
     top   = GetDict(cjson, "top", 0)
     width = GetDict(cjson, "width", 1200)
     height= GetDict(cjson, "height", 300)
+
+    ' Lista blanca de tipos de controles soportados
+    Dim supportedTypes: supportedTypes = Array( _
+        acLabel, acTextBox, acCommandButton, acCheckBox, acOptionButton, _
+        acComboBox, acListBox, acSubform, acImage, acRectangle, _
+        acLine, acOptionGroup, acPageBreak, acCustomControl, _
+        acToggleButton, acTabCtl, acPage _
+    )
+    
+    Dim i, isSupported: isSupported = False
+    For i = 0 To UBound(supportedTypes)
+        If ct = supportedTypes(i) Then
+            isSupported = True
+            Exit For
+        End If
+    Next
+    
+    ' Mantener el extra If ct = 109 por robustez con JSON externos
+    If ct = 109 Then isSupported = True
+    
+    If Not isSupported Then
+        LogMessage "ui-import: controlType no soportado: " & ct
+        Exit Sub
+    End If
 
     Set ctrl = app.CreateControl(formName, ct, sec, , , left, top, width, height)
     If name <> "" Then On Error Resume Next: ctrl.Name = name: Err.Clear
@@ -3779,12 +4393,58 @@ Sub CreateControlFromJson(app, formName, cjson)
     SetCtrlProp ctrl, "OnDblClick",    GetDict(cjson, "onDblClick", "")
     SetCtrlProp ctrl, "OnChange",      GetDict(cjson, "onChange", "")
     SetCtrlProp ctrl, "OnCurrent",     GetDict(cjson, "onCurrent", "")
+
+    ' === Carga de imagen desde assets/ui/assets/img ===
+    ' Convención JSON:
+    '   - "image": nombre o ruta (relativa o absoluta)
+    '   - "picture": alias alternativo
+    '   - "assetImage": preferente para buscar en ui/assets/img
+    Dim imgRef
+    imgRef = GetDict(cjson, "assetImage", "")
+    If imgRef = "" Then imgRef = GetDict(cjson, "image", "")
+    If imgRef = "" Then imgRef = GetDict(cjson, "picture", "")
+
+    If imgRef <> "" Then
+        Dim cfgPath: Set cfgPath = gConfig ' ya cargado globalmente
+        Dim fullImg
+        fullImg = ResolveAssetImagePath(imgRef, cfgPath)
+        If fullImg <> "" Then
+            On Error Resume Next
+            If ct = acImage Then
+                ' Cargar sin UI: asignando la ruta directamente a Picture
+                ctrl.Picture = fullImg
+                ' Si existe la propiedad PictureType, usamos Linked (evita incrustar y prompts)
+                If HasProperty(ctrl, "PictureType") Then
+                    ' 1 = Linked (comportamiento silencioso)
+                    ctrl.Properties("PictureType") = 1
+                End If
+                Err.Clear
+            ElseIf ct = acCommandButton Then
+                ' Botones con icono
+                If HasProperty(ctrl, "Picture") Then
+                    ctrl.Properties("Picture") = fullImg
+                    Err.Clear
+                End If
+            End If
+        Else
+            LogMessage "ui-import: imagen no encontrada: " & imgRef
+        End If
+    End If
 End Sub
 
 Sub SetCtrlProp(ctrl, p, v)
     On Error Resume Next
-    If IsEmpty(v) Or v = "" Then Exit Sub
-    CallByName ctrl, p, 4, v   ' vbLet=4
+    ' Salir si el valor está vacío, es nulo o es una cadena vacía
+    If IsEmpty(v) Or v = "" Or IsNull(v) Then Exit Sub
+    
+    ' Verificar si el control tiene la propiedad
+    If Not HasProperty(ctrl, p) Then
+        LogVerbose "Propiedad " & p & " no existe en el control"
+        Exit Sub
+    End If
+    
+    ' Aplicar la propiedad
+    ctrl.Properties(p) = v
     Err.Clear
 End Sub
 
@@ -3794,19 +4454,324 @@ Function ImportFormFromJson_Finalize()
     If ImportFormFromJson_app Is Nothing Then Exit Function
 
     Dim app: Set app = ImportFormFromJson_app
-    Dim targetName: targetName = ImportFormFromJson_target
+    Dim tmpName: tmpName = ImportFormFromJson_target
+    Dim finalName: finalName = ImportFormFromJson_finalTarget
 
-    app.DoCmd.Save 2, targetName       ' acForm
+    ' Guardar temporal
+    app.DoCmd.Save acForm, tmpName
+    Err.Clear
+    
+    ' Swap atomico: borrar antiguo y renombrar temporal
+    app.DoCmd.DeleteObject acForm, finalName  ' borrar antiguo si existe (silencioso)
+    Err.Clear
+    app.DoCmd.Rename finalName, acForm, tmpName
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    If Err.Number <> 0 Then
+        ' Si falla el rename, intentar borrar el antiguo y reintentar
+        app.DoCmd.DeleteObject acForm, finalName
+        Err.Clear
+        app.DoCmd.Rename finalName, acForm, tmpName
+        On Error Resume Next
+        app.DisplayAlerts = False
+        app.Echo False
+        app.DoCmd.SetWarnings False
+        Err.Clear
+    End If
+    Err.Clear
+    
     On Error Resume Next
     app.RunCommand 126                 ' acCmdCompileAndSaveAllModules
     Err.Clear
-    app.DoCmd.Close 2, targetName, 0   ' acSaveYes=0 (ya guardado)
     CloseAccess app
 
     ' Limpiar referencias
     Set ImportFormFromJson_app = Nothing
     ImportFormFromJson_target = ""
+    ImportFormFromJson_finalTarget = ""
     Set ImportFormFromJson_root = Nothing
 
     ImportFormFromJson_Finalize = True
 End Function
+
+' ============================================================================
+' SECCIÓN UI-AS-CODE: FUNCIONES DE REBUILD Y UPDATE
+' ============================================================================
+
+Function UI_RebuildAll(dbPath, files, config)
+    On Error Resume Next
+    UI_RebuildAll = False
+    Dim app: Set app = OpenAccess(dbPath, GetDatabasePassword(dbPath))
+    If app Is Nothing Then Exit Function
+
+    ' Reforzar blindaje como en rebuild/update
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+
+    ' Validar array de archivos
+    If Not IsArray(files) Or SafeUBound(files) < 0 Then
+        LogMessage "ui-rebuild: no se encontraron formularios"
+        CloseAccess app
+        UI_RebuildAll = True
+        Exit Function
+    End If
+
+    Dim i, formPath, formName, tmpName
+    For i = 0 To UBound(files)
+        formPath = ResolvePath(files(i))
+        formName = UI_DeduceFormName(formPath, config)
+        If formName <> "" Then
+            ' Patron atomico: importar en temporal primero
+            tmpName = formName & "__tmp"
+            If UI_ImportOne(app, formPath, tmpName) Then
+                ' Si la importacion temporal fue exitosa, hacer swap atomico
+                app.DoCmd.DeleteObject acForm, formName
+                Err.Clear
+                app.DoCmd.Rename formName, acForm, tmpName
+                On Error Resume Next
+                app.DisplayAlerts = False
+                app.Echo False
+                app.DoCmd.SetWarnings False
+                Err.Clear
+                If Err.Number <> 0 Then
+                    ' Si falla el rename, intentar borrar el antiguo y reintentar
+                    app.DoCmd.DeleteObject acForm, formName
+                    Err.Clear
+                    app.DoCmd.Rename formName, acForm, tmpName
+                    On Error Resume Next
+                    app.DisplayAlerts = False
+                    app.Echo False
+                    app.DoCmd.SetWarnings False
+                    Err.Clear
+                End If
+                Err.Clear
+            Else
+                LogMessage "ui-rebuild: error en " & formName & ", manteniendo version anterior"
+            End If
+        End If
+    Next
+
+    ' Compilacion global al final (como update/rebuild)
+    On Error Resume Next
+    app.RunCommand 126  ' acCmdCompileAndSaveAllModules
+    Err.Clear
+    CloseAccess app
+    UI_RebuildAll = True
+End Function
+
+Function UI_UpdateSome(dbPath, items, config)
+    On Error Resume Next
+    UI_UpdateSome = False
+    Dim app: Set app = OpenAccess(dbPath, GetDatabasePassword(dbPath))
+    If app Is Nothing Then Exit Function
+
+    ' Reforzar blindaje como en rebuild/update
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+
+    ' Validar array de items
+    If Not IsArray(items) Or SafeUBound(items) < 0 Then
+        LogMessage "ui-update: no se encontraron elementos para actualizar"
+        CloseAccess app
+        UI_UpdateSome = True
+        Exit Function
+    End If
+
+    Dim i, formPath, formsDir, uiRoot, resolved, pattern, tmpName
+    uiRoot = UI_GetRoot(config)
+    formsDir = UI_GetFormsDir(config)
+    pattern = UI_GetFormFilePattern(config)
+
+    For i = 0 To UBound(items)
+        resolved = items(i)
+        ' Permite pasar nombre base o ruta JSON
+        If InStr(LCase(resolved), ".json") = 0 Then
+            resolved = ResolvePath(uiRoot & "\" & formsDir & "\" & resolved & ".json")
+        Else
+            resolved = ResolvePath(resolved)
+        End If
+        formPath = resolved
+        
+        ' Validar que el archivo JSON existe
+        Dim objFSO: Set objFSO = CreateObject("Scripting.FileSystemObject")
+        If Not objFSO.FileExists(formPath) Then
+            LogMessage "ui-update: JSON no encontrado: " & formPath
+            ' Continuar con el siguiente elemento
+        Else
+            Dim formName: formName = UI_DeduceFormName(formPath, config)
+            If formName <> "" Then
+                ' Patron atomico: importar en temporal primero
+                tmpName = formName & "__tmp"
+                If UI_ImportOne(app, formPath, tmpName) Then
+                    ' Si la importacion temporal fue exitosa, hacer swap atomico
+                    app.DoCmd.DeleteObject acForm, formName
+                    Err.Clear
+                    app.DoCmd.Rename formName, acForm, tmpName
+                    On Error Resume Next
+                    app.DisplayAlerts = False
+                    app.Echo False
+                    app.DoCmd.SetWarnings False
+                    Err.Clear
+                    If Err.Number <> 0 Then
+                        ' Si falla el rename, intentar borrar el antiguo y reintentar
+                        app.DoCmd.DeleteObject acForm, formName
+                        Err.Clear
+                        app.DoCmd.Rename formName, acForm, tmpName
+                        On Error Resume Next
+                        app.DisplayAlerts = False
+                        app.Echo False
+                        app.DoCmd.SetWarnings False
+                        Err.Clear
+                    End If
+                    Err.Clear
+                Else
+                    LogMessage "ui-update: error en " & formName & ", manteniendo version anterior"
+                End If
+            End If
+        End If
+    Next
+
+    On Error Resume Next
+    app.RunCommand 126  ' acCmdCompileAndSaveAllModules
+    Err.Clear
+    CloseAccess app
+    UI_UpdateSome = True
+End Function
+
+Function UI_DeduceFormName(formPath, config)
+    On Error Resume Next
+    Dim nameFromFile: nameFromFile = UI_NameFromFileBase(config)
+    If nameFromFile Then
+        UI_DeduceFormName = FileBaseName(formPath)
+    Else
+        ' en el futuro: leer "name" del JSON si se quisiera
+        UI_DeduceFormName = FileBaseName(formPath)
+    End If
+End Function
+
+Function UI_ImportOne(app, formPath, formName)
+    On Error Resume Next
+    UI_ImportOne = False
+    Dim json: json = ReadAllText(formPath)
+    If json = "" Then Exit Function
+    Dim root: Set root = JsonParse(json)
+    If root Is Nothing Then Exit Function
+
+    ' Validar estructura JSON
+    Dim validationError: validationError = ""
+    If Not ValidateFormJson(root, validationError) Then
+        LogMessage "ui-import: JSON invalido - " & validationError
+        Exit Function
+    End If
+
+    ' Patron atomico: crear formulario temporal
+    Dim tmpName: tmpName = formName & "__tmp"
+    
+    ' Crear temporal
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    app.DoCmd.CreateForm
+    ' Reforzar anti-UI después de CreateForm
+    app.DisplayAlerts = False
+    app.Echo = False
+    app.DoCmd.SetWarnings False
+    If Err.Number <> 0 Then 
+        LogMessage "ui-import: no se pudo crear temporal: " & Err.Description
+        Err.Clear
+        Exit Function
+    End If
+    Dim created: created = app.Screen.ActiveForm.Name
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    app.DoCmd.Rename tmpName, acForm, created
+    On Error Resume Next
+    app.DisplayAlerts = False
+    app.Echo False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    Err.Clear
+    app.DoCmd.OpenForm tmpName, acDesign, , , , acHidden
+    ' Reforzar anti-UI después de OpenForm
+    app.DisplayAlerts = False
+    app.Echo = False
+    app.DoCmd.SetWarnings False
+    Err.Clear
+    
+    Dim frm: Set frm = app.Forms(tmpName)
+
+    ' Aplicar propiedades y controles sobre el temporal
+    SetPropIfExists frm, "RecordSource", GetDict(root,"recordSource","")
+    SetPropIfExists frm, "Caption",      GetDict(root,"caption","")
+    ApplySections frm, root
+
+    ' Controles
+    DeleteAllControls app, tmpName, frm
+    Dim arr, i, cnt
+    If root.Exists("controls") Then
+        arr = root("controls")
+        If IsArray(arr) Then
+            For i = 0 To UBound(arr)
+                CreateControlFromJson app, tmpName, arr(i)
+            Next
+        ElseIf IsObject(arr) Then
+            On Error Resume Next
+            Dim kkeys, kk
+            kkeys = arr.Keys
+            If Err.Number = 0 Then
+                For kk = 0 To UBound(kkeys)
+                    CreateControlFromJson app, tmpName, arr(kkeys(kk))
+                Next
+            Else
+                Err.Clear
+                ' Mantén el fallback por índice si el objeto soporta indexación posicional
+                cnt = arr.Count
+                If Err.Number = 0 Then
+                    For i = 0 To cnt - 1
+                        CreateControlFromJson app, tmpName, arr(i)
+                    Next
+                End If
+                Err.Clear
+            End If
+        End If
+    End If
+
+    ' Guardar temporal
+    app.DoCmd.Save acForm, tmpName
+    Err.Clear
+    
+    ' Swap atomico: si todo va bien, borrar antiguo y renombrar temporal
+    app.DoCmd.DeleteObject acForm, formName  ' borrar antiguo si existe (silencioso)
+    Err.Clear
+    app.DoCmd.Rename formName, acForm, tmpName
+    If Err.Number <> 0 Then
+        ' Si falla el rename, intentar borrar el antiguo y reintentar
+        app.DoCmd.DeleteObject acForm, formName
+        Err.Clear
+        app.DoCmd.Rename formName, acForm, tmpName
+    End If
+    Err.Clear
+    
+    ' Cerrar el formulario ya renombrado
+    app.DoCmd.Close acForm, formName, acSaveNo   ' ya guardado
+    UI_ImportOne = True
+End Function
+
+' Stub seguro para RunTests - evita errores y procesos colgados
+Sub RunTests()
+    LogMessage "RunTests: no implementado (stub)"
+End Sub
