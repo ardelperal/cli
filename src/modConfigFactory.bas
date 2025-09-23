@@ -1,4 +1,4 @@
-﻿Attribute VB_Name = "modConfigFactory"
+Attribute VB_Name = "modConfigFactory"
 Option Compare Database
 Option Explicit
 
@@ -21,10 +21,9 @@ Public Function CreateConfigService() As IConfig
 FactoryErrorHandler:
     ' ESTA FACTORÍA ES DE NIVEL 0. NO PUEDE DEPENDER DEL ERRORHANDLER.
     ' Si falla, debe notificar directamente y detener la ejecución.
-    MsgBox "Error CRÍTICO al crear el servicio de configuración: " & vbCrLf & _
-           "Err #" & Err.Number & " - " & Err.Description & vbCrLf & _
-           "Fuente: " & Err.Source & vbCrLf & _
-           "La aplicación no puede continuar y se cerrará.", vbCritical, "Fallo de Arranque de CONDOR"
+    ' Error crítico - no mostrar diálogos en CLI
+    On Error Resume Next
+    Err.Clear
     Set CreateConfigService = Nothing
 End Function
 

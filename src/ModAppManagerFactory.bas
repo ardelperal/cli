@@ -1,7 +1,7 @@
 ﻿Attribute VB_Name = "ModAppManagerFactory"
 Option Compare Database
 Option Explicit
-
+'CAMBIOS DE ANDRÉS
 
 Public Function CreateAppManager() As IAppManager
     On Error GoTo ErrorHandler
