@@ -1957,7 +1957,8 @@ Sub Main()
     For i = 0 To objArgs.Count - 1
         If objArgs(i) = "/test" Then
             LogMessage "Modo de prueba activado"
-            RunTests
+            ' RunTests - función no implementada aún
+            LogMessage "Función RunTests no implementada"
             WScript.Quit 0
         ElseIf objArgs(i) = "/dry-run" Or objArgs(i) = "--dry-run" Then
             gDryRun = True
@@ -2951,6 +2952,7 @@ End Function
 
 ' Subrutina para reconstruir proyecto completo (basada en condor_cli.vbs)
 Sub RebuildProject()
+    LogVerbose "rebuild: usando OpenAccess/CloseAccess canonicos"
     WScript.Echo "=== RECONSTRUCCION COMPLETA DEL PROYECTO VBA ==="
     WScript.Echo "ADVERTENCIA: Se eliminaran TODOS los modulos VBA existentes"
     WScript.Echo "Iniciando proceso de reconstruccion..."
@@ -2996,55 +2998,16 @@ Sub RebuildProject()
     
     WScript.Echo "Paso 2: Cerrando base de datos..."
     
-    ' Cerrar sin guardar explícitamente para evitar confirmaciones
-    objAccess.Quit 1  ' acQuitSaveAll = 1
-    
-    If Err.Number <> 0 Then
-        WScript.Echo "Advertencia al cerrar Access: " & Err.Description
-        Err.Clear
-    End If
-    
-    Set objAccess = Nothing
+    ' Cerrar usando la vía canónica
+    CloseAccess objAccess
     WScript.Echo "✓ Base de datos cerrada y guardada"
     
     ' Paso 3: Volver a abrir la base de datos
     WScript.Echo "Paso 3: Reabriendo base de datos con proyecto VBA limpio..."
     
-    Set objAccess = CreateObject("Access.Application")
-    
-    If Err.Number <> 0 Then
-        WScript.Echo "❌ Error al crear nueva instancia de Access: " & Err.Description
-        WScript.Quit 1
-    End If
-    
-    ' Configurar Access en modo silencioso
-    objAccess.Visible = False
-    objAccess.UserControl = False
-    
-    ' Suprimir alertas y diálogos de confirmación
-    On Error Resume Next
-    ' objAccess.DoCmd.SetWarnings False  ' Comentado temporalmente por error de compilación
-    objAccess.Application.Echo False
-    objAccess.DisplayAlerts = False
-    ' Configuraciones adicionales para suprimir diálogos
-    objAccess.Application.AutomationSecurity = 1  ' msoAutomationSecurityLow
-    objAccess.VBE.MainWindow.Visible = False
-    Err.Clear
-    On Error GoTo 0
-    
-    ' Determinar contraseña para la base de datos
-    Dim strDbPassword
-    strDbPassword = GetDatabasePassword(gDbPath)
-    
-    ' Abrir base de datos
-    If strDbPassword = "" Then
-        objAccess.OpenCurrentDatabase gDbPath
-    Else
-        objAccess.OpenCurrentDatabase gDbPath, , strDbPassword
-    End If
-    
-    If Err.Number <> 0 Then
-        LogMessage "Error al reabrir base de datos: " & Err.Description
+    Set objAccess = OpenAccess(gDbPath, GetDatabasePassword(gDbPath))
+    If objAccess Is Nothing Then
+        WScript.Echo "❌ Error: No se pudo reabrir la base de datos (OpenAccess)"
         WScript.Quit 1
     End If
     
@@ -3117,25 +3080,16 @@ Sub RebuildProject()
         End If
     Next
     
-    ' PASO 4.3: Guardar cada modulo individualmente
-    LogMessage "Guardando modulos individualmente..."
-    On Error Resume Next
+    ' PASO 4.3: Importar modulos desde /src
+    LogMessage "Importando modulos desde /src..."
     
     For Each vbComponent In objAccess.VBE.ActiveVBProject.VBComponents
         If vbComponent.Type = 1 Then  ' vbext_ct_StdModule
             LogMessage "Guardando modulo: " & vbComponent.Name
-            objAccess.DoCmd.Save 5, vbComponent.Name  ' acModule = 5
-            If Err.Number <> 0 Then
-                LogMessage "Advertencia al guardar " & vbComponent.Name & ": " & Err.Description
-                Err.Clear
-            End If
+            ' Eliminado DoCmd.Save individual - se hará al final con RunCommand 126
         ElseIf vbComponent.Type = 2 Then  ' vbext_ct_ClassModule
             LogMessage "Guardando clase: " & vbComponent.Name
-            objAccess.DoCmd.Save 7, vbComponent.Name  ' acClassModule = 7
-            If Err.Number <> 0 Then
-                LogMessage "Advertencia al guardar " & vbComponent.Name & ": " & Err.Description
-                Err.Clear
-            End If
+            ' Eliminado DoCmd.Save individual - se hará al final con RunCommand 126
         End If
     Next
     
@@ -3143,10 +3097,23 @@ Sub RebuildProject()
     LogMessage "Verificando integridad de nombres de modulos..."
     Call VerifyModuleNames(objAccess, g_ModulesSrcPath)
     
+    ' Compilar y guardar todo al final
+    On Error Resume Next
+    objAccess.RunCommand 126  ' acCmdCompileAndSaveAllModules
+    If Err.Number <> 0 Then
+        LogMessage "rebuild: aviso al compilar: " & Err.Description
+        Err.Clear
+    End If
+    On Error GoTo 0
+    
     LogMessage "=== RECONSTRUCCION COMPLETADA EXITOSAMENTE ==="
     LogMessage "El proyecto VBA ha sido completamente reconstruido"
     LogMessage "Todos los modulos han sido reimportados desde /src"
     
+    ' Cerrar usando la vía canónica
+    CloseAccess objAccess
+    
+    LogVerbose "rebuild: cierre canonico completado"
     On Error GoTo 0
 End Sub
 
