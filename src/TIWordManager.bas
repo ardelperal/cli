@@ -1,4 +1,4 @@
-Attribute VB_Name = "TIWordManager"
+﻿Attribute VB_Name = "TIWordManager"
 Option Compare Database
 Option Explicit
 

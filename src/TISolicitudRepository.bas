@@ -1,4 +1,4 @@
-Attribute VB_Name = "TISolicitudRepository"
+﻿Attribute VB_Name = "TISolicitudRepository"
 Option Compare Database
 Option Explicit
 

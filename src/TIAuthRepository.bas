@@ -1,4 +1,4 @@
-Attribute VB_Name = "TIAuthRepository"
+﻿Attribute VB_Name = "TIAuthRepository"
 Option Compare Database
 Option Explicit
 

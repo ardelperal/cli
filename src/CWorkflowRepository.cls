@@ -116,3 +116,4 @@ ErrorHandler:
     Set IWorkflowRepository_GetNextStates = dict ' Devolver diccionario vac?o en caso de error
     GoTo Cleanup
 End Function
+

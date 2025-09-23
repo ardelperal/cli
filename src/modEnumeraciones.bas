@@ -1,4 +1,4 @@
-Attribute VB_Name = "modEnumeraciones"
+﻿Attribute VB_Name = "modEnumeraciones"
 Option Compare Database
 Option Explicit
 

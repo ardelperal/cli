@@ -1,4 +1,4 @@
-Attribute VB_Name = "TIOperationRepository"
+﻿Attribute VB_Name = "TIOperationRepository"
 Option Compare Database
 Option Explicit
 

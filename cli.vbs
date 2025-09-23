@@ -1213,6 +1213,11 @@ Function CopyAsAnsi(srcPath, dstPath)
         Exit Function
     End If
     
+    ' Para archivos .bas, asegurar que Option Explicit esté presente
+    If LCase(Right(srcPath, 4)) = ".bas" Then
+        content = EnsureOptionExplicit(content)
+    End If
+    
     ' Escribir archivo destino como ASCII/ANSI
     Set dstFile = fso.CreateTextFile(dstPath, True, False) ' Overwrite, ASCII
     dstFile.Write content
@@ -1227,6 +1232,121 @@ Function CopyAsAnsi(srcPath, dstPath)
     
     If gDebug Then LogMessage "[DEBUG] Archivo copiado como ANSI: " & srcPath & " -> " & dstPath
     CopyAsAnsi = True
+End Function
+
+' Función para asegurar que Option Compare Database y Option Explicit estén presentes
+Function EnsureOptionExplicit(vbMod)
+    On Error Resume Next
+    EnsureOptionExplicit = False
+    If vbMod Is Nothing Then Exit Function
+
+    Dim total, i, lineTxt, found, firstNonEmpty, firstNonEmptyLineNum
+    found = False
+    total = vbMod.CountOfLines
+
+    ' Si está vacío, inserta directamente
+    If total < 1 Then
+        vbMod.InsertLines 1, "Option Explicit"
+        If Err.Number <> 0 Then Err.Clear
+        EnsureOptionExplicit = True
+        Exit Function
+    End If
+
+    ' Busca "Option Explicit" en las primeras líneas (hasta 20 para rendimiento)
+    firstNonEmpty = ""
+    firstNonEmptyLineNum = 0
+    For i = 1 To total
+        lineTxt = vbMod.Lines(i, 1)
+        If LCase(Trim(lineTxt)) = "option explicit" Then
+            found = True
+            Exit For
+        End If
+        If firstNonEmpty = "" Then
+            If Trim(lineTxt) <> "" Then
+                firstNonEmpty = LCase(Trim(lineTxt))
+                firstNonEmptyLineNum = i
+            End If
+        End If
+        If i >= 20 Then Exit For
+    Next
+
+    If Not found Then
+        ' Si la primera no vacía es Option Compare, inserta debajo; si no, al inicio
+        If Left(firstNonEmpty, 13) = "option compare" Then
+            vbMod.InsertLines firstNonEmptyLineNum + 1, "Option Explicit"
+        Else
+            vbMod.InsertLines 1, "Option Explicit"
+        End If
+        If Err.Number <> 0 Then Err.Clear
+    End If
+
+    EnsureOptionExplicit = True
+End Function
+
+Function PostProcessInsertedModule(vbComp)
+    On Error Resume Next
+    PostProcessInsertedModule = False
+    If vbComp Is Nothing Then Exit Function
+
+    Dim cm, total, i, lineTxt
+    Dim optExpLine, optCmpLine, firstCodeLine
+
+    Set cm = vbComp.CodeModule
+    If cm Is Nothing Then Exit Function
+
+    total = cm.CountOfLines
+    If total < 1 Then
+        cm.InsertLines 1, "Option Explicit"
+        If Err.Number <> 0 Then Err.Clear
+        PostProcessInsertedModule = True
+        Exit Function
+    End If
+
+    optExpLine = 0
+    optCmpLine = 0
+    firstCodeLine = 0
+
+    ' Recorre un bloque razonable (primeras 400 líneas o total) para ubicar cabecera/atributos y opciones
+    For i = 1 To total
+        lineTxt = LCase(Trim(cm.Lines(i, 1)))
+
+        ' Detecta Option Explicit / Option Compare
+        If lineTxt = "option explicit" Then
+            optExpLine = i
+            Exit For ' Ya no necesitamos buscar más si ya está
+        End If
+        If Left(lineTxt, 14) = "option compare" And optCmpLine = 0 Then
+            optCmpLine = i
+        End If
+
+        ' Marca la primera línea "de código" útil (salta cabeceras .cls y atributos)
+        If firstCodeLine = 0 Then
+            If lineTxt <> "" _
+               And Left(lineTxt, 7) <> "version" _
+               And Left(lineTxt, 5) <> "begin" _
+               And lineTxt <> "end" _
+               And Left(lineTxt, 9) <> "attribute" _
+               And Left(lineTxt, 1) <> "'" Then
+                firstCodeLine = i
+            End If
+        End If
+
+        If i >= 400 Then Exit For
+    Next
+
+    If optExpLine = 0 Then
+        ' Insertar Option Explicit debajo de Option Compare si existe; si no, en el primer código o al inicio
+        If optCmpLine > 0 Then
+            cm.InsertLines optCmpLine + 1, "Option Explicit"
+        ElseIf firstCodeLine > 0 Then
+            cm.InsertLines firstCodeLine, "Option Explicit"
+        Else
+            cm.InsertLines 1, "Option Explicit"
+        End If
+        If Err.Number <> 0 Then Err.Clear
+    End If
+
+    PostProcessInsertedModule = True
 End Function
 
 Function ImportVBAModuleFromFile(objAccess, modulePath, moduleName, moduleType)
@@ -1312,6 +1432,8 @@ Function ImportVBAModuleFromFile(objAccess, modulePath, moduleName, moduleType)
                         End If
                         On Error GoTo 0
                     End If
+                    ' Post-procesar el módulo después del renombrado final
+                    Call PostProcessInsertedModule(vbComp)
                     found = True
                     Exit For
                 End If
@@ -1319,6 +1441,9 @@ Function ImportVBAModuleFromFile(objAccess, modulePath, moduleName, moduleType)
         End If
         
         If found Then
+            ' Post-procesar el módulo para asegurar Option Explicit
+            Call PostProcessInsertedModule(vbComp)
+            
             ImportVBAModuleFromFile = True
             If gDebug Then LogMessage "[DEBUG] Modulo importado directamente: " & moduleName
             Exit Function
@@ -1387,6 +1512,8 @@ Function ImportVBAModuleFromFile(objAccess, modulePath, moduleName, moduleType)
                         Err.Clear
                     End If
                 End If
+                ' Post-procesar el módulo después del renombrado final
+                Call PostProcessInsertedModule(vbComp)
                 found = True
                 Exit For
             End If
@@ -1403,6 +1530,16 @@ Function ImportVBAModuleFromFile(objAccess, modulePath, moduleName, moduleType)
     
     ' Resultado final
     If found Then
+        ' Post-procesar el módulo para asegurar Option Explicit
+        Call PostProcessInsertedModule(vbComp)
+        
+        ' Asegurar Option Explicit en el módulo importado
+        Dim vbMod
+        Set vbMod = vbComp.CodeModule
+        If Not vbMod Is Nothing Then
+            Call EnsureOptionExplicit(vbMod)
+        End If
+        
         ' Compilar y guardar todos los modulos para que Access los reconozca
         On Error Resume Next
         objAccess.DoCmd.RunCommand 7 ' acCmdCompileAndSaveAllModules
@@ -1509,6 +1646,12 @@ Function ImportVBAModuleSafe(moduleName, moduleContent, moduleType)
         Exit Function
     End If
     
+    ' Post-procesar el módulo para asegurar Option Explicit
+    Call PostProcessInsertedModule(vbComp)
+    
+    ' Asegurar que Option Explicit esté presente
+    Call EnsureOptionExplicit(vbMod)
+
     ' Si llegamos aquí, todo fue exitoso
     ImportVBAModuleSafe = True
     On Error GoTo 0
@@ -1587,6 +1730,12 @@ Sub ImportVBAModule(moduleName, moduleContent, moduleType)
         Exit Sub
     End If
     
+    ' Post-procesar el módulo para asegurar Option Explicit
+    Call PostProcessInsertedModule(vbComp)
+    
+    ' Asegurar que Option Explicit esté presente
+    Call EnsureOptionExplicit(vbMod)
+
     ' Si llegamos aquí, todo fue exitoso
     LogMessage "Modulo VBA " & moduleName & " creado exitosamente"
 End Sub
@@ -1788,11 +1937,12 @@ ExtractReports:
     End If
 End Function
 
-' Función para escribir contenido de modulo a archivo
+' Función para escribir contenido de modulo a archivo con metadatos
 Function WriteModuleFile(filePath, content)
     On Error Resume Next
     
-    Dim file
+    Dim file, fileExt, finalContent
+    Dim hasAttribute, hasOption, hasExplicit, insertAfter
     
     WriteModuleFile = False
     
@@ -1803,18 +1953,89 @@ Function WriteModuleFile(filePath, content)
         CreateFolderRecursive parentDir
     End If
     
-    ' Escribir archivo
-    Set file = objFSO.CreateTextFile(filePath, True, False) ' Sobrescribir, ANSI
-    If Err.Number <> 0 Then
-        Err.Clear
-        Set file = objFSO.CreateTextFile(filePath, True, False) ' Sobrescribir, ASCII
-    End If
+    ' Obtener extensión del archivo para determinar metadatos
+    fileExt = LCase(objFSO.GetExtensionName(filePath))
     
-    If Not file Is Nothing Then
-        file.Write content
-        file.Close
-        WriteModuleFile = True
-    End If
+    ' Agregar metadatos según el tipo de archivo
+    finalContent = ""
+    
+    Select Case fileExt
+        Case "bas"
+            ' Módulos estándar: agregar metadatos si no existen
+            hasAttribute = InStr(1, content, "Attribute VB_Name", vbTextCompare) > 0
+            hasOption = InStr(1, content, "Option Compare Database", vbTextCompare) > 0
+            hasExplicit = InStr(1, content, "Option Explicit", vbTextCompare) > 0
+            
+            finalContent = content
+            
+            ' Agregar Attribute VB_Name si no existe
+            If Not hasAttribute Then
+                finalContent = "Attribute VB_Name = """ & objFSO.GetBaseName(filePath) & """" & vbCrLf & finalContent
+            End If
+            
+            ' Agregar Option Compare Database si no existe (debe ir antes que Option Explicit)
+            If Not hasOption Then
+                If hasAttribute Then
+                    ' Si ya tiene Attribute, agregar Option Compare Database después
+                    finalContent = Replace(finalContent, "Attribute VB_Name = """ & objFSO.GetBaseName(filePath) & """", _
+                                         "Attribute VB_Name = """ & objFSO.GetBaseName(filePath) & """" & vbCrLf & "Option Compare Database", 1, 1)
+                Else
+                    ' Si no tiene Attribute pero acabamos de agregarlo, agregar Option Compare Database después
+                    finalContent = Replace(finalContent, "Attribute VB_Name = """ & objFSO.GetBaseName(filePath) & """", _
+                                         "Attribute VB_Name = """ & objFSO.GetBaseName(filePath) & """" & vbCrLf & "Option Compare Database", 1, 1)
+                End If
+            End If
+            
+            ' Agregar Option Explicit si no existe (debe ir después de Option Compare Database)
+            If Not hasExplicit Then
+                ' Buscar dónde insertar Option Explicit
+                If hasOption Or (Not hasOption And Not hasAttribute) Then
+                    ' Si tiene Option Compare Database o acabamos de agregar Attribute + Option Compare Database
+                    insertAfter = "Option Compare Database"
+                    finalContent = Replace(finalContent, insertAfter, insertAfter & vbCrLf & "Option Explicit", 1, 1)
+                ElseIf hasAttribute Then
+                    ' Si solo tiene Attribute
+                    insertAfter = "Attribute VB_Name = """ & objFSO.GetBaseName(filePath) & """"
+                    finalContent = Replace(finalContent, insertAfter, insertAfter & vbCrLf & "Option Explicit", 1, 1)
+                End If
+            End If
+        Case "cls"
+            ' Módulos de clase: verificar si ya tienen metadatos completos
+            If InStr(1, content, "VERSION 1.0 CLASS", vbTextCompare) = 0 Then
+                ' Agregar metadatos completos de clase
+                finalContent = "VERSION 1.0 CLASS" & vbCrLf & _
+                              "BEGIN" & vbCrLf & _
+                              "  MultiUse = -1  'True" & vbCrLf & _
+                              "END" & vbCrLf & _
+                              "Attribute VB_Name = """ & objFSO.GetBaseName(filePath) & """" & vbCrLf & _
+                              "Attribute VB_GlobalNameSpace = False" & vbCrLf & _
+                              "Attribute VB_Creatable = False" & vbCrLf & _
+                              "Attribute VB_PredeclaredId = False" & vbCrLf & _
+                              "Attribute VB_Exposed = False" & vbCrLf & content
+                ' Agregar Option Compare Database si no existe
+                If InStr(1, finalContent, "Option Compare Database", vbTextCompare) = 0 Then
+                    finalContent = finalContent & vbCrLf & "Option Compare Database"
+                End If
+            Else
+                ' Ya tiene metadatos, usar contenido tal como está
+                finalContent = content
+            End If
+        Case Else
+            ' Otros tipos: usar contenido tal como está
+            finalContent = content
+    End Select
+    
+    ' Escribir archivo usando ADODB.Stream para preservar caracteres especiales
+    Dim objStream
+    Set objStream = CreateObject("ADODB.Stream")
+    objStream.Type = 2 ' adTypeText
+    objStream.Charset = "UTF-8"
+    objStream.Open
+    objStream.WriteText finalContent, 0 ' adWriteChar
+    objStream.SaveToFile filePath, 2 ' adSaveCreateOverWrite
+    objStream.Close
+    Set objStream = Nothing
+    WriteModuleFile = True
     
     If Err.Number <> 0 Then
         LogMessage "Error escribiendo archivo: " & filePath & " - " & Err.Description
@@ -2667,12 +2888,12 @@ Function CleanVBAFile(filePath, fileExtension)
         ' Una línea se descarta si cumple cualquiera de estas condiciones:
         ' CORRECCION CRITICA: Filtrar TODAS las líneas que empiecen con 'Attribute'
         ' y todos los metadatos de archivos .cls
+        ' PRESERVAR: Option Compare Database es esencial para el funcionamiento
         If Not (Left(Trim(strLine), 9) = "Attribute" Or _
                 Left(Trim(strLine), 17) = "VERSION 1.0 CLASS" Or _
                 Trim(strLine) = "BEGIN" Or _
                 Left(Trim(strLine), 8) = "MultiUse" Or _
                 Trim(strLine) = "END" Or _
-                Trim(strLine) = "Option Compare Database" Or _
                 Trim(strLine) = "Option Explicit") Then
             
             ' Si no cumple ninguna condición, es código VBA válido
@@ -2978,6 +3199,16 @@ Sub RebuildProject()
     WScript.Echo "=== RECONSTRUCCION COMPLETA DEL PROYECTO VBA ==="
     WScript.Echo "ADVERTENCIA: Se eliminaran TODOS los modulos VBA existentes"
     WScript.Echo "Iniciando proceso de reconstruccion..."
+    
+    ' Cerrar procesos de Access existentes antes de comenzar
+    CloseExistingAccessProcesses
+    
+    ' Abrir Access de forma segura
+    Set objAccess = OpenAccess(gDbPath, GetDatabasePassword(gDbPath))
+    If objAccess Is Nothing Then
+        WScript.Echo "❌ Error: No se pudo abrir Access"
+        WScript.Quit 1
+    End If
     
     On Error Resume Next
     

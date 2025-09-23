@@ -1,4 +1,4 @@
-Attribute VB_Name = "TestOperationLogger"
+﻿Attribute VB_Name = "TestOperationLogger"
 Option Compare Database
 Option Explicit
 

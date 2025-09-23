@@ -1,4 +1,4 @@
-Attribute VB_Name = "modOperationLoggerFactory"
+﻿Attribute VB_Name = "modOperationLoggerFactory"
 Option Compare Database
 Option Explicit
 

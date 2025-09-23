@@ -1,4 +1,4 @@
-Attribute VB_Name = "TINotificationService"
+﻿Attribute VB_Name = "TINotificationService"
 
 Option Compare Database
 Option Explicit
@@ -270,3 +270,5 @@ Cleanup:
     Set rs = Nothing
     Set localConfig = Nothing
 End Function
+
+

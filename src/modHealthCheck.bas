@@ -1,4 +1,4 @@
-Attribute VB_Name = "modHealthCheck"
+﻿Attribute VB_Name = "modHealthCheck"
 Option Compare Database
 Option Explicit
 

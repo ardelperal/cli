@@ -1,4 +1,4 @@
-Attribute VB_Name = "TIExpedienteRepository"
+﻿Attribute VB_Name = "TIExpedienteRepository"
 
 Option Compare Database
 Option Explicit

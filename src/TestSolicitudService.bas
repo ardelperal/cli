@@ -1,4 +1,4 @@
-Attribute VB_Name = "TestSolicitudService"
+﻿Attribute VB_Name = "TestSolicitudService"
 Option Compare Database
 Option Explicit
 

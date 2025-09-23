@@ -1,4 +1,4 @@
-Attribute VB_Name = "TestAppManager"
+﻿Attribute VB_Name = "TestAppManager"
 Option Compare Database
 Option Explicit
 

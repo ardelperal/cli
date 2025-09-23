@@ -1,4 +1,4 @@
-VERSION 1.0 CLASS
+﻿VERSION 1.0 CLASS
 BEGIN
   MultiUse = -1  'True
 END
@@ -8,7 +8,6 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
 Option Compare Database
-Option Explicit
 
 Private m_idExpediente As Long
 Private m_Nemotecnico As String
@@ -185,3 +184,4 @@ Public Function EsValido() As Boolean
                 Len(ResponsableCalidad) > 0 And _
                 Len(EmailResponsable) > 0)
 End Function
+

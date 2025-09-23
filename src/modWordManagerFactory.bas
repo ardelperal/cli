@@ -1,4 +1,4 @@
-Attribute VB_Name = "modWordManagerFactory"
+﻿Attribute VB_Name = "modWordManagerFactory"
 Option Compare Database
 Option Explicit
 

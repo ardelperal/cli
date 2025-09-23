@@ -1,4 +1,4 @@
-Attribute VB_Name = "modConfigFactory"
+﻿Attribute VB_Name = "modConfigFactory"
 Option Compare Database
 Option Explicit
 
@@ -27,3 +27,5 @@ FactoryErrorHandler:
            "La aplicación no puede continuar y se cerrará.", vbCritical, "Fallo de Arranque de CONDOR"
     Set CreateConfigService = Nothing
 End Function
+
+

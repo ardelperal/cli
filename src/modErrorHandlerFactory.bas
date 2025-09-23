@@ -1,4 +1,4 @@
-Attribute VB_Name = "modErrorHandlerFactory"
+﻿Attribute VB_Name = "modErrorHandlerFactory"
 
 Option Compare Database
 Option Explicit

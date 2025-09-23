@@ -120,3 +120,4 @@ Private Sub Class_Terminate()
     Set m_NotificationRepository = Nothing
     Set m_ErrorHandler = Nothing
 End Sub
+

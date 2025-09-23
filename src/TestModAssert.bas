@@ -1,4 +1,4 @@
-Attribute VB_Name = "TestModAssert"
+﻿Attribute VB_Name = "TestModAssert"
 Option Compare Database
 Option Explicit
 

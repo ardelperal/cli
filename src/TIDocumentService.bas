@@ -1,4 +1,4 @@
-Attribute VB_Name = "TIDocumentService"
+﻿Attribute VB_Name = "TIDocumentService"
 Option Compare Database
 Option Explicit
 
@@ -120,3 +120,5 @@ Private Sub SuiteTeardown()
     fs.DeleteFolderRecursive modTestUtils.GetWorkspacePath() & "doc_service_test\"
     Set fs = Nothing
 End Sub
+
+
