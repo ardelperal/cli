@@ -1,16 +1,41 @@
-# CLI.VBS - Herramienta de Desarrollo para Microsoft Access
+# CLI para Microsoft Access - Estado Final
 
-## Descripción
-CLI.VBS es una herramienta de línea de comandos desarrollada en VBScript para gestionar módulos VBA en bases de datos de Microsoft Access. Permite exportar, importar y actualizar módulos de forma automatizada.
+Herramienta de desarrollo implementada en VBScript para gestionar bases de datos de Microsoft Access desde línea de comandos.
 
-## Características Principales
-- Exportación de módulos VBA desde Access a archivos fuente
-- Importación de módulos desde archivos fuente a Access
-- Actualización de módulos existentes
-- Soporte para módulos estándar (.bas) y clases (.cls)
-- Configuración mediante archivo INI
-- Logging detallado de operaciones
-- Modo verbose para diagnóstico
+## Características Implementadas
+
+### Funcionalidades Core
+- **Extracción de módulos VBA**: Exporta módulos y clases a archivos fuente (.bas, .cls)
+- **Reconstrucción de módulos**: Importa módulos desde archivos fuente con validación de sintaxis
+- **Gestión de formularios**: Exportación e importación completa de formularios con propiedades, controles y código VBA
+- **Esquemas de base de datos**: Exportación de estructura de tablas en formato JSON y Markdown
+- **Listado de objetos**: Inventario completo de todos los objetos de la base de datos
+
+### Mejoras de Robustez Implementadas
+- **Normalización de extensiones**: Uso de `ResolveSourcePathForModule` para manejo consistente de archivos
+- **Compilación centralizada**: Una sola compilación al final de las operaciones para mayor eficiencia
+- **Función AntiUI**: Centralización de la configuración anti-interactividad en una función reutilizable
+- **Sintaxis corregida**: Eliminación de `app.Echo = False` (sintaxis incorrecta) y `app.DisplayAlerts = False` (no existe en Access)
+- **Reintentos robustos**: Lógica de reintentos para obtener nombres de formularios activos tras `CreateForm`
+- **Limpieza automática**: Manejo de errores con limpieza de recursos en caso de fallos
+- **Verificación de referencias**: `CheckMissingReferences` detecta referencias VBA rotas antes de compilar
+- **Acceso VBE obligatorio**: `CheckVBProjectAccess` es obligatorio en operaciones críticas
+- **Operaciones DryRun**: Funciones `Maybe_DoCmd_*` permiten simulación sin efectos reales
+- **Manejo de errores estructurado**: `HandleErr` y `HandleErrWithCleanup` para gestión centralizada de errores
+
+### Configuración
+- **Archivo INI**: Configuración centralizada en `cli.ini`
+- **Validación**: Comando `/validate` para verificar configuración
+- **Modo simulación**: Modificador `/dry-run` para pruebas sin cambios reales
+- **Verificación VBE**: Validación obligatoria del acceso al modelo de objetos VBA
+- **Detección de referencias**: Verificación automática de referencias rotas antes de compilar
+
+### Testing y Depuración
+- **Modificadores de testing**: `/dry-run`, `/validate`
+- **Logging detallado**: Opciones `--verbose` y `--quiet`
+- **Manejo de errores**: Captura y reporte de errores con contexto
+- **Simulación segura**: Operaciones DryRun que no modifican la base de datos
+- **Verificación previa**: Validación de referencias y acceso VBE antes de operaciones críticas
 
 ## Configuración
 
@@ -84,6 +109,28 @@ cli/
 ```
 
 ## Funciones Principales
+
+### CheckMissingReferences
+Función que verifica referencias VBA rotas antes de compilar:
+- Detecta referencias no disponibles en el proyecto VBA
+- Previene errores de compilación por dependencias faltantes
+- Se ejecuta automáticamente antes de todas las operaciones de compilación
+
+### Maybe_DoCmd_* (Operaciones DryRun)
+Conjunto de funciones que respetan el modo DryRun:
+- `Maybe_DoCmd_Rename`: Renombrado seguro de objetos
+- `Maybe_DoCmd_Delete`: Eliminación controlada de objetos
+- `Maybe_DoCmd_OpenFormDesignHidden`: Apertura de formularios en modo diseño
+- `Maybe_DoCmd_Close`: Cierre controlado de objetos
+- `Maybe_DoCmd_Save`: Guardado seguro de objetos
+- `Maybe_DoCmd_CompileAndSaveAllModules`: Compilación con soporte DryRun
+
+### HandleErr y HandleErrWithCleanup
+Sistema de manejo de errores estructurado:
+- Diferentes niveles de severidad: "warning", "error", "critical"
+- Limpieza automática de recursos en errores críticos
+- Logging contextualizado según el nivel de error
+- Terminación controlada de la aplicación cuando es necesario
 
 ### ImportVBAModuleSafe
 Función robusta para importar módulos VBA con manejo de errores mejorado:

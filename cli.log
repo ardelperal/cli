@@ -550,3 +550,15 @@
 [23/09/2025 15:07:27] Modo de prueba activado
 [23/09/2025 15:07:27] FunciÃ³n RunTests no implementada
 [23/09/2025 15:07:45] [ERROR] Comando no reconocido: /help
+[23/09/2025 16:25:16] [ERROR] Comando no reconocido: /help
+[23/09/2025 17:11:03] [ERROR] Comando no reconocido: /help
+[23/09/2025 17:11:14] Validacion de configuracion: OK
+[23/09/2025 17:11:24] Modo simulacion activado
+[23/09/2025 17:11:24] [ERROR] Faltan argumentos para list-objects
+[23/09/2025 17:11:33] Modo simulacion activado
+[23/09/2025 17:17:56] [ERROR] Comando no reconocido: /help
+[23/09/2025 17:18:06] Validacion de configuracion: OK
+[23/09/2025 17:22:45] [ERROR] Comando no reconocido: bundle
+[23/09/2025 17:39:53] [ERROR] Comando no reconocido: /help
+[23/09/2025 18:41:43] [ERROR] Comando no reconocido: /help
+[23/09/2025 19:59:25] [ERROR] Comando no reconocido: /help
