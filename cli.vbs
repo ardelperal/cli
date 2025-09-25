@@ -14,17 +14,29 @@ Option Explicit
 ' SECCIÓN 1: CONSTANTES DE ACCESS
 ' ============================================================================
 
-' Constantes de objetos de Access
-Const acModule = 5
-Const acClassModule = 100
-Const acForm = -32768
-Const acReport = -32764
-Const acMacro = -32766
+' Constantes de objetos de Access (tipos de objeto)
 Const acTable = 0
 Const acQuery = 1
-Const acDefault = -1
+Const acForm = 2
+Const acReport = 3
+Const acMacro = 4
+Const acModule = 5
+Const acClassModule = 100
+
+' Constantes de vistas de Access
+Const acViewNormal = 0
+Const acViewDesign = 1
+Const acViewPreview = 2
+
+' Constantes de modo de ventana
 Const acHidden = 1
 Const acNormal = 0
+
+' Constantes de guardado
+Const acSaveNo = 0
+Const acSaveYes = 1
+
+Const acDefault = -1
 
 ' Constantes de comandos de Access
 Const acCmdCompileAndSaveAllModules = 126
@@ -1869,6 +1881,34 @@ Function WriteModuleFile(filePath, content)
     End If
 End Function
 
+' Función para escribir archivos de texto usando ADODB.Stream
+Sub WriteTextFile(filePath, content)
+    On Error Resume Next
+    
+    ' Crear directorio padre si no existe
+    Dim parentDir
+    parentDir = objFSO.GetParentFolderName(filePath)
+    If Not objFSO.FolderExists(parentDir) Then
+        CreateFolderRecursive parentDir
+    End If
+    
+    ' Escribir archivo usando ADODB.Stream para preservar caracteres especiales
+    Dim objStream
+    Set objStream = CreateObject("ADODB.Stream")
+    objStream.Type = 2 ' adTypeText
+    objStream.Charset = "UTF-8"
+    objStream.Open
+    objStream.WriteText content, 0 ' adWriteChar
+    objStream.SaveToFile filePath, 2 ' adSaveCreateOverWrite
+    objStream.Close
+    Set objStream = Nothing
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error escribiendo archivo: " & filePath & " - " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
 ' Función para exportar objetos de Access
 Function ExportAccessObject(objectType, objectName, filePath)
     On Error Resume Next
@@ -2124,7 +2164,37 @@ Sub Main()
             End If
             
         Case "export-form"
-            ExportFormCommand
+            If cleanArgCount >= 3 Then
+                Dim strDbPath2, strFormName2, strOutputPath2, strPassword2
+                Dim i3
+                
+                ' Asignar argumentos básicos
+                strDbPath2 = ResolvePath(cleanArgs(1))
+                strFormName2 = cleanArgs(2)
+                strOutputPath2 = ""
+                strPassword2 = gPassword
+                
+                ' Procesar argumentos opcionales
+                For i3 = 3 To cleanArgCount - 1
+                    If LCase(cleanArgs(i3)) = "--output" And i3 < cleanArgCount - 1 Then
+                        strOutputPath2 = cleanArgs(i3 + 1)
+                    ElseIf LCase(cleanArgs(i3)) = "--password" And i3 < cleanArgCount - 1 Then
+                        strPassword2 = cleanArgs(i3 + 1)
+                    End If
+                Next
+                
+                If Not gDryRun Then
+                    ExportFormToJSON strDbPath2, strFormName2, strOutputPath2, strPassword2
+                Else
+                    LogMessage "SIMULACION: Exportaria formulario " & strFormName2 & " de " & strDbPath2
+                End If
+            Else
+                LogError "Faltan argumentos para export-form"
+                WScript.Echo "Uso: cscript cli.vbs export-form <db_path> <form_name> [--output <path>] [--password <pwd>]"
+                WScript.Echo "  --output <path>  : Especifica la ruta de salida del archivo JSON"
+                WScript.Echo "  --password <pwd> : Especifica la contraseña de la base de datos"
+                ShowHelp
+            End If
             
         Case "test"
             RunTests
@@ -3965,105 +4035,153 @@ End Function
 
 ' ===== FUNCIONES PARA EXPORT-FORM =====
 
-Sub ExportFormCommand()
-    Dim strDbPath, strFormName, strOutputPath, strPassword
-    Dim i
-    
-    ' Verificar argumentos mínimos
-    If cleanArgCount < 3 Then
-        WScript.Echo "Error: El comando export-form requiere al menos una ruta de base de datos y un nombre de formulario."
-        WScript.Echo "Uso: cscript cli.vbs export-form <db_path> <form_name> [--output <path>] [--password <pwd>] [--pretty]"
-        WScript.Quit 1
-    End If
-    
-    ' Asignar argumentos básicos
-    strDbPath = ResolvePath(cleanArgs(1))
-    strFormName = cleanArgs(2)
-    strOutputPath = ""
-    strPassword = gPassword
-    
-    ' Procesar argumentos opcionales
-    For i = 3 To cleanArgCount - 1
-        If LCase(cleanArgs(i)) = "--output" And i < cleanArgCount - 1 Then
-            strOutputPath = cleanArgs(i + 1)
-        ElseIf LCase(cleanArgs(i)) = "--password" And i < cleanArgCount - 1 Then
-            strPassword = cleanArgs(i + 1)
-        ElseIf LCase(cleanArgs(i)) = "--pretty" Then
-            ' Flag para formato pretty (se puede implementar después)
-        End If
-    Next
-    
-    ' Construir ruta de salida por defecto si no se especifica
-    If strOutputPath = "" Then
-        Dim uiFormsPath
-        uiFormsPath = objFSO.GetParentFolderName(WScript.ScriptFullName) & "\ui\forms\"
-        ' Asegurarse de que el directorio existe
-        If Not objFSO.FolderExists(uiFormsPath) Then 
-            objFSO.CreateFolder objFSO.GetParentFolderName(WScript.ScriptFullName) & "\ui"
-            objFSO.CreateFolder uiFormsPath
-        End If
-        strOutputPath = objFSO.BuildPath(uiFormsPath, strFormName & ".json")
-    End If
-    
-    ' Verificar que el archivo de base de datos existe
-    If Not objFSO.FileExists(strDbPath) Then
-        WScript.Echo "Error: La base de datos no existe: " & strDbPath
-        WScript.Quit 1
-    End If
-    
-    If gVerbose Then WScript.Echo "Exportando formulario '" & strFormName & "' desde: " & strDbPath
-    
-    If Not gDryRun Then
-        Call ExportFormToJson(strDbPath, strFormName, strOutputPath, strPassword)
-    Else
-        WScript.Echo "[DRY-RUN] Se exportaria formulario '" & strFormName & "' a: " & strOutputPath
-    End If
-End Sub
-
 Sub ExportFormToJson(dbPath, formName, outputPath, password)
     Dim objAccess, frm, jsonContent
     
-    ' Abrir Access
-    Set objAccess = OpenAccess(dbPath, password)
-    If objAccess Is Nothing Then
-        WScript.Echo "Error: No se pudo abrir la base de datos"
+    ' SONDA 1: Verificar parámetros de entrada
+    If gVerbose Then WScript.Echo "[SONDA] Iniciando ExportFormToJson con parametros:"
+    If gVerbose Then WScript.Echo "[SONDA]   - dbPath: " & dbPath
+    If gVerbose Then WScript.Echo "[SONDA]   - formName: " & formName
+    If gVerbose Then WScript.Echo "[SONDA]   - outputPath: " & outputPath
+    If gVerbose Then WScript.Echo "[SONDA]   - password: " & IIf(password = "", "(vacio)", "(proporcionada)")
+    
+    ' SONDA 2: Verificar existencia del archivo de base de datos
+    If gVerbose Then WScript.Echo "[SONDA] Verificando existencia del archivo de base de datos..."
+    If Not objFSO.FileExists(dbPath) Then
+        WScript.Echo "[ERROR] El archivo de base de datos no existe: " & dbPath
         WScript.Quit 1
     End If
+    If gVerbose Then WScript.Echo "[SONDA] Archivo de base de datos encontrado correctamente"
+    
+    ' SONDA 3: Intentar abrir Access
+    If gVerbose Then WScript.Echo "[SONDA] Intentando abrir Access..."
+    Set objAccess = OpenAccess(dbPath, password)
+    If objAccess Is Nothing Then
+        WScript.Echo "[ERROR] No se pudo abrir la base de datos"
+        WScript.Echo "[SONDA] Posibles causas:"
+        WScript.Echo "[SONDA]   - Contraseña incorrecta"
+        WScript.Echo "[SONDA]   - Archivo corrupto"
+        WScript.Echo "[SONDA]   - Permisos insuficientes"
+        WScript.Quit 1
+    End If
+    If gVerbose Then WScript.Echo "[SONDA] Access abierto correctamente"
     
     On Error Resume Next
     
-    ' Abrir formulario en modo diseño
-    If gVerbose Then WScript.Echo "Abriendo formulario '" & formName & "' en modo diseño..."
-    objAccess.DoCmd.OpenForm formName, 3 ' acDesign
+    ' SONDA 4: Construir ruta de salida por defecto si no se especifica
+    If outputPath = "" Then
+        If gVerbose Then WScript.Echo "[SONDA] Construyendo ruta de salida por defecto..."
+        Dim uiFormsPath
+        uiFormsPath = objFSO.GetParentFolderName(WScript.ScriptFullName) & "\ui\forms\"
+        If gVerbose Then WScript.Echo "[SONDA] Ruta calculada: " & uiFormsPath
+        
+        ' Asegurarse de que el directorio existe
+        If Not objFSO.FolderExists(uiFormsPath) Then 
+            If gVerbose Then WScript.Echo "[SONDA] Creando directorio ui\forms..."
+            If Not objFSO.FolderExists(objFSO.GetParentFolderName(WScript.ScriptFullName) & "\ui") Then
+                objFSO.CreateFolder objFSO.GetParentFolderName(WScript.ScriptFullName) & "\ui"
+                If gVerbose Then WScript.Echo "[SONDA] Directorio ui creado"
+            End If
+            objFSO.CreateFolder uiFormsPath
+            If gVerbose Then WScript.Echo "[SONDA] Directorio forms creado"
+        End If
+        outputPath = objFSO.BuildPath(uiFormsPath, formName & ".json")
+        If gVerbose Then WScript.Echo "[SONDA] Ruta final de salida: " & outputPath
+    End If
     
-    If Err.Number <> 0 Then
-        WScript.Echo "Error: No se pudo abrir el formulario '" & formName & "': " & Err.Description
+    ' SONDA 5: Verificar que el formulario existe en la base de datos
+    If gVerbose Then WScript.Echo "[SONDA] Verificando existencia del formulario en la base de datos..."
+    Dim formExists: formExists = False
+    Dim formObj
+    For Each formObj In objAccess.CurrentProject.AllForms
+        If LCase(formObj.Name) = LCase(formName) Then
+            formExists = True
+            Exit For
+        End If
+    Next
+    
+    If Not formExists Then
+        WScript.Echo "[ERROR] El formulario '" & formName & "' no existe en la base de datos"
+        WScript.Echo "[SONDA] Formularios disponibles:"
+        For Each formObj In objAccess.CurrentProject.AllForms
+            WScript.Echo "[SONDA]   - " & formObj.Name
+        Next
         Call CloseAccess(objAccess)
         WScript.Quit 1
     End If
+    If gVerbose Then WScript.Echo "[SONDA] Formulario encontrado en la base de datos"
     
-    ' Obtener referencia al formulario
+    ' SONDA 6: Abrir formulario en modo diseño y oculto
+    If gVerbose Then WScript.Echo "[SONDA] Abriendo formulario '" & formName & "' en modo diseño..."
+    objAccess.DoCmd.OpenForm formName, acViewDesign, , , , acHidden
+    
+    If Err.Number <> 0 Then
+        WScript.Echo "[ERROR] No se pudo abrir el formulario '" & formName & "': " & Err.Description
+        WScript.Echo "[SONDA] Codigo de error: " & Err.Number
+        WScript.Echo "[SONDA] Posibles causas:"
+        WScript.Echo "[SONDA]   - Formulario corrupto"
+        WScript.Echo "[SONDA]   - Dependencias faltantes"
+        WScript.Echo "[SONDA]   - Permisos insuficientes"
+        Call CloseAccess(objAccess)
+        WScript.Quit 1
+    End If
+    If gVerbose Then WScript.Echo "[SONDA] Formulario abierto correctamente en modo diseño"
+    
+    ' SONDA 7: Obtener referencia al formulario
+    If gVerbose Then WScript.Echo "[SONDA] Obteniendo referencia al formulario..."
     Set frm = objAccess.Forms(formName)
+    If frm Is Nothing Then
+        WScript.Echo "[ERROR] No se pudo obtener referencia al formulario"
+        Call CloseAccess(objAccess)
+        WScript.Quit 1
+    End If
+    If gVerbose Then WScript.Echo "[SONDA] Referencia al formulario obtenida correctamente"
+    If gVerbose Then WScript.Echo "[SONDA] Nombre del formulario: " & frm.Name
+    If gVerbose Then WScript.Echo "[SONDA] Numero de controles: " & frm.Controls.Count
     
-    ' Generar JSON básico del formulario
+    ' SONDA 8: Generar JSON básico del formulario
+    If gVerbose Then WScript.Echo "[SONDA] Generando JSON del formulario..."
     jsonContent = GenerateFormJson(frm)
+    If Len(jsonContent) = 0 Then
+        WScript.Echo "[ERROR] No se pudo generar el contenido JSON"
+        objAccess.DoCmd.Close acForm, formName, acSaveNo
+        Call CloseAccess(objAccess)
+        WScript.Quit 1
+    End If
+    If gVerbose Then WScript.Echo "[SONDA] JSON generado correctamente (" & Len(jsonContent) & " caracteres)"
     
-    ' Cerrar formulario
-    objAccess.DoCmd.Close 2, formName ' acForm
+    ' SONDA 9: Cerrar formulario sin guardar cambios
+    If gVerbose Then WScript.Echo "[SONDA] Cerrando formulario..."
+    objAccess.DoCmd.Close acForm, formName, acSaveNo
+    If gVerbose Then WScript.Echo "[SONDA] Formulario cerrado correctamente"
     
-    ' Cerrar Access
+    ' SONDA 10: Cerrar Access
+    If gVerbose Then WScript.Echo "[SONDA] Cerrando Access..."
     Call CloseAccess(objAccess)
+    If gVerbose Then WScript.Echo "[SONDA] Access cerrado correctamente"
     
-    ' Escribir archivo JSON
+    ' SONDA 11: Escribir archivo JSON
+    If gVerbose Then WScript.Echo "[SONDA] Escribiendo archivo JSON a: " & outputPath
     Call WriteTextFile(outputPath, jsonContent)
     
-    WScript.Echo "Formulario exportado exitosamente a: " & outputPath
+    ' SONDA 12: Verificar que el archivo se escribió correctamente
+    If objFSO.FileExists(outputPath) Then
+        Dim fileSize: fileSize = objFSO.GetFile(outputPath).Size
+        If gVerbose Then WScript.Echo "[SONDA] Archivo escrito correctamente (" & fileSize & " bytes)"
+        WScript.Echo "Formulario exportado exitosamente a: " & outputPath
+    Else
+        WScript.Echo "[ERROR] No se pudo escribir el archivo JSON"
+        WScript.Quit 1
+    End If
     
     On Error GoTo 0
 End Sub
 
 Function GenerateFormJson(frm)
     Dim json, ctrl, i
+    
+    ' SONDA JSON 1: Iniciar generación de JSON
+    If gVerbose Then WScript.Echo "[SONDA JSON] Iniciando generacion de JSON para formulario: " & frm.Name
     
     json = "{" & vbCrLf
     json = json & "  ""schemaVersion"": ""1.0.0""," & vbCrLf
@@ -4072,45 +4190,133 @@ Function GenerateFormJson(frm)
     
     On Error Resume Next
     
+    ' SONDA JSON 2: Extraer propiedades básicas del formulario
+    If gVerbose Then WScript.Echo "[SONDA JSON] Extrayendo propiedades basicas del formulario..."
+    
     ' Propiedades básicas del formulario
     json = json & "    ""caption"": """ & EscapeJsonString(frm.Caption) & """," & vbCrLf
+    If Err.Number <> 0 Then
+        If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Caption: " & Err.Description
+        Err.Clear
+    End If
+    
     json = json & "    ""width"": " & frm.Width & "," & vbCrLf
+    If Err.Number <> 0 Then
+        If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Width: " & Err.Description
+        Err.Clear
+    End If
+    
     json = json & "    ""height"": " & frm.Section(0).Height & "," & vbCrLf
+    If Err.Number <> 0 Then
+        If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Height: " & Err.Description
+        Err.Clear
+    End If
+    
     json = json & "    ""recordSource"": """ & EscapeJsonString(frm.RecordSource) & """," & vbCrLf
+    If Err.Number <> 0 Then
+        If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo RecordSource: " & Err.Description
+        Err.Clear
+    End If
+    
     json = json & "    ""modal"": " & LCase(CStr(frm.Modal)) & "," & vbCrLf
+    If Err.Number <> 0 Then
+        If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Modal: " & Err.Description
+        Err.Clear
+    End If
+    
     json = json & "    ""popUp"": " & LCase(CStr(frm.PopUp)) & vbCrLf
+    If Err.Number <> 0 Then
+        If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo PopUp: " & Err.Description
+        Err.Clear
+    End If
     
     json = json & "  }," & vbCrLf
     json = json & "  ""controls"": [" & vbCrLf
     
+    ' SONDA JSON 3: Procesar controles
+    If gVerbose Then WScript.Echo "[SONDA JSON] Procesando " & frm.Controls.Count & " controles..."
+    
     ' Procesar controles
     For i = 0 To frm.Controls.Count - 1
+        If gVerbose Then WScript.Echo "[SONDA JSON] Procesando control " & (i + 1) & " de " & frm.Controls.Count
+        
         Set ctrl = frm.Controls(i)
-        
-        If i > 0 Then json = json & "," & vbCrLf
-        
-        json = json & "    {" & vbCrLf
-        json = json & "      ""name"": """ & EscapeJsonString(ctrl.Name) & """," & vbCrLf
-        json = json & "      ""type"": """ & GetControlTypeName(ctrl.ControlType) & """," & vbCrLf
-        json = json & "      ""left"": " & ctrl.Left & "," & vbCrLf
-        json = json & "      ""top"": " & ctrl.Top & "," & vbCrLf
-        json = json & "      ""width"": " & ctrl.Width & "," & vbCrLf
-        json = json & "      ""height"": " & ctrl.Height & vbCrLf
-        
-        ' Agregar propiedades específicas según el tipo de control
-        If ctrl.ControlType = 109 Then ' TextBox
-            json = json & "," & vbCrLf & "      ""controlSource"": """ & EscapeJsonString(ctrl.ControlSource) & """"
-        ElseIf ctrl.ControlType = 104 Then ' Label
-            json = json & "," & vbCrLf & "      ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
-        ElseIf ctrl.ControlType = 105 Then ' CommandButton
-            json = json & "," & vbCrLf & "      ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
+        If ctrl Is Nothing Then
+            If gVerbose Then WScript.Echo "[SONDA JSON] Control " & i & " es Nothing, saltando..."
+        Else
+            If gVerbose Then WScript.Echo "[SONDA JSON] Control: " & ctrl.Name & " (Tipo: " & ctrl.ControlType & ")"
+            
+            If i > 0 Then json = json & "," & vbCrLf
+            
+            json = json & "    {" & vbCrLf
+            json = json & "      ""name"": """ & EscapeJsonString(ctrl.Name) & """," & vbCrLf
+            If Err.Number <> 0 Then
+                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Name del control " & i & ": " & Err.Description
+                Err.Clear
+            End If
+            
+            json = json & "      ""type"": """ & GetControlTypeName(ctrl.ControlType) & """," & vbCrLf
+            If Err.Number <> 0 Then
+                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo ControlType del control " & i & ": " & Err.Description
+                Err.Clear
+            End If
+            
+            json = json & "      ""left"": " & ctrl.Left & "," & vbCrLf
+            If Err.Number <> 0 Then
+                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Left del control " & i & ": " & Err.Description
+                Err.Clear
+            End If
+            
+            json = json & "      ""top"": " & ctrl.Top & "," & vbCrLf
+            If Err.Number <> 0 Then
+                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Top del control " & i & ": " & Err.Description
+                Err.Clear
+            End If
+            
+            json = json & "      ""width"": " & ctrl.Width & "," & vbCrLf
+            If Err.Number <> 0 Then
+                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Width del control " & i & ": " & Err.Description
+                Err.Clear
+            End If
+            
+            json = json & "      ""height"": " & ctrl.Height & vbCrLf
+            If Err.Number <> 0 Then
+                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Height del control " & i & ": " & Err.Description
+                Err.Clear
+            End If
+            
+            ' SONDA JSON 4: Agregar propiedades específicas según el tipo de control
+            If gVerbose Then WScript.Echo "[SONDA JSON] Agregando propiedades especificas para tipo " & ctrl.ControlType
+            
+            If ctrl.ControlType = 109 Then ' TextBox
+                json = json & "," & vbCrLf & "      ""controlSource"": """ & EscapeJsonString(ctrl.ControlSource) & """"
+                If Err.Number <> 0 Then
+                    If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo ControlSource del TextBox: " & Err.Description
+                    Err.Clear
+                End If
+            ElseIf ctrl.ControlType = 104 Then ' Label
+                json = json & "," & vbCrLf & "      ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
+                If Err.Number <> 0 Then
+                    If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Caption del Label: " & Err.Description
+                    Err.Clear
+                End If
+            ElseIf ctrl.ControlType = 105 Then ' CommandButton
+                json = json & "," & vbCrLf & "      ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
+                If Err.Number <> 0 Then
+                    If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Caption del CommandButton: " & Err.Description
+                    Err.Clear
+                End If
+            End If
+            
+            json = json & vbCrLf & "    }"
         End If
-        
-        json = json & vbCrLf & "    }"
     Next
     
     json = json & vbCrLf & "  ]" & vbCrLf
     json = json & "}" & vbCrLf
+    
+    ' SONDA JSON 5: Finalizar generación
+    If gVerbose Then WScript.Echo "[SONDA JSON] JSON generado exitosamente, longitud: " & Len(json) & " caracteres"
     
     On Error GoTo 0
     
