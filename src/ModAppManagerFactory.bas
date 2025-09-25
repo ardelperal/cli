@@ -28,3 +28,4 @@ ErrorHandler:
     Debug.Print "Error fatal en ModAppManagerFactory.CreateAppManager: " & Err.Description
     Set CreateAppManager = Nothing
 End Function
+

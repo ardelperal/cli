@@ -1,0 +1,94 @@
+{
+    "formName": "FormComercial",
+    "controls": [
+        {
+            "name": "lblTitulo",
+            "type": "Label",
+            "controlType": 100,
+            "caption": "EDICIÓN COMERCIAL",
+            "left": 0,
+            "top": 0,
+            "width": 8280,
+            "height": 645,
+            "visible": "verdadero"
+        },
+        {
+            "name": "ComandoAyuda",
+            "type": "CommandButton",
+            "controlType": 104,
+            "caption": "Salir",
+            "onClick": "[Event Procedure]",
+            "left": 8286,
+            "top": 45,
+            "width": 618,
+            "height": 618,
+            "visible": "verdadero"
+        },
+        {
+            "name": "Comercial",
+            "type": "TextBox",
+            "controlType": 109,
+            "left": 1427,
+            "top": 150,
+            "width": 7477,
+            "height": 297,
+            "visible": "verdadero"
+        },
+        {
+            "name": "DESCRIPCION",
+            "type": "TextBox",
+            "controlType": 109,
+            "left": 1427,
+            "top": 690,
+            "width": 7477,
+            "height": 1107,
+            "visible": "verdadero"
+        },
+        {
+            "name": "Etiqueta232",
+            "type": "Label",
+            "controlType": 100,
+            "caption": "NOMBRE",
+            "left": 150,
+            "top": 150,
+            "width": 1050,
+            "height": 345,
+            "visible": "verdadero"
+        },
+        {
+            "name": "Etiqueta240",
+            "type": "Label",
+            "controlType": 100,
+            "caption": "DESCRIP.",
+            "left": 150,
+            "top": 690,
+            "width": 1050,
+            "height": 315,
+            "visible": "verdadero"
+        },
+        {
+            "name": "ComandoRegistrar",
+            "type": "CommandButton",
+            "controlType": 104,
+            "caption": "Editar",
+            "onClick": "[Event Procedure]",
+            "left": 7545,
+            "top": 45,
+            "width": 578,
+            "height": 578,
+            "visible": "verdadero"
+        },
+        {
+            "name": "cmdSalir",
+            "type": "CommandButton",
+            "controlType": 104,
+            "caption": "Salir",
+            "onClick": "[Event Procedure]",
+            "left": 8326,
+            "top": 45,
+            "width": 578,
+            "height": 578,
+            "visible": "verdadero"
+        }
+    ]
+}

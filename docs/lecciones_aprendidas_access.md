@@ -226,6 +226,313 @@ WScript.Echo "INICIO: " & Now & " - Operación X"
 WScript.Echo "FIN: " & Now & " - Operación X completada"
 ```
 
+## 🎨 Creación Programática de Formularios
+
+### Lecciones de Automatización de UI
+
+**Basado en análisis de `Ejemplo_Formularios.md`:**
+
+#### Secuencia Correcta para Creación de Formularios
+
+```vbscript
+' 1. CREAR FORMULARIO BASE
+Set frm = objAccess.CreateForm()
+nombreFormulario = frm.Name
+
+' 2. CONFIGURAR PROPIEDADES DEL FORMULARIO PRIMERO
+With frm
+    .Caption = "Título del Formulario"
+    .RecordSource = ""  ' Definir origen de datos si es necesario
+    .ScrollBars = 0     ' Sin barras de desplazamiento
+    .NavigationButtons = False
+    .RecordSelectors = False
+    .AutoCenter = True
+    .Width = 8000       ' Ancho en twips
+    .Section(acDetail).Height = 6000
+    .Section(acHeader).Height = 800
+    .Section(acHeader).Visible = True
+End With
+
+' 3. CREAR CONTROLES CON POSICIONAMIENTO CALCULADO
+x = 500  ' Posición X inicial
+y = 200  ' Posición Y inicial
+anchoControl = 2000
+altoControl = 300
+```
+
+#### Patrones de Creación de Controles
+
+**✅ ETIQUETAS (Labels):**
+```vbscript
+Set ctlLabel = objAccess.CreateControl(nombreFormulario, acLabel, acDetail, "", "", _
+                                     x, y, anchoControl, altoControl)
+With ctlLabel
+    .Caption = "Texto de la etiqueta"
+    .FontName = "Arial"
+    .FontSize = 10
+    .FontBold = True
+    .TextAlign = 2  ' Centrado
+    .ForeColor = RGB(0, 0, 128)
+End With
+```
+
+**✅ CAMPOS DE TEXTO (TextBox):**
+```vbscript
+Set ctlTextBox = objAccess.CreateControl(nombreFormulario, acTextBox, acDetail, "", "", _
+                                        x, y, anchoControl, altoControl)
+With ctlTextBox
+    .Name = "txtNombreCampo"
+    .FontName = "Arial"
+    .FontSize = 10
+    .Format = "Short Date"  ' Para fechas
+    .ShowDatePicker = 1     ' Para campos de fecha
+End With
+```
+
+**✅ COMBO BOX:**
+```vbscript
+Set ctlComboBox = objAccess.CreateControl(nombreFormulario, acComboBox, acDetail, "", "", _
+                                        x, y, anchoControl, altoControl)
+With ctlComboBox
+    .Name = "cboCategoria"
+    .RowSourceType = "Value List"
+    .RowSource = "Opción1;Opción2;Opción3"
+    .LimitToList = True
+End With
+```
+
+**✅ BOTONES DE COMANDO:**
+```vbscript
+Set ctlCommandButton = objAccess.CreateControl(nombreFormulario, acCommandButton, acDetail, "", "", _
+                                             x, y, 1200, 400)
+With ctlCommandButton
+    .Name = "btnAccion"
+    .Caption = "Texto del Botón"
+    .FontBold = True
+    .BackColor = RGB(0, 128, 0)    ' Verde
+    .ForeColor = RGB(255, 255, 255) ' Texto blanco
+End With
+```
+
+#### Agregar Código VBA a Eventos
+
+```vbscript
+' Obtener módulo del formulario
+Set moduloFormulario = objAccess.Forms(nombreFormulario).Module
+
+' Agregar código de evento
+codigoVBA = "Private Sub btnGuardar_Click()" & vbCrLf & _
+            "    MsgBox ""Datos guardados"", vbInformation" & vbCrLf & _
+            "End Sub" & vbCrLf
+
+moduloFormulario.InsertText codigoVBA
+```
+
+#### Guardar y Renombrar Formularios
+
+```vbscript
+' Verificar si existe formulario con el nombre deseado
+If FormularioExiste(objAccess, nombreFinal) Then
+    objAccess.DoCmd.DeleteObject acForm, nombreFinal
+End If
+
+' Guardar con nombre temporal
+objAccess.DoCmd.Save acForm, nombreFormulario
+
+' Cerrar antes de renombrar
+objAccess.DoCmd.Close acForm, nombreFormulario, acSaveYes
+
+' Renombrar al nombre final
+objAccess.DoCmd.Rename nombreFinal, acForm, nombreFormulario
+```
+
+### Consideraciones de Diseño UI
+
+#### Posicionamiento y Espaciado
+
+```vbscript
+' Usar sistema de coordenadas en twips
+' 1 pulgada = 1440 twips
+x = 500          ' Margen izquierdo
+y = 200          ' Posición vertical inicial
+anchoControl = 2000  ' Ancho estándar
+altoControl = 300    ' Alto estándar
+espacioVertical = 300 ' Espacio entre controles
+
+' Incrementar Y para siguiente control
+y = y + altoControl + espacioVertical
+```
+
+#### Colores y Estilos Estándar
+
+```vbscript
+' Colores recomendados para botones
+RGB(0, 128, 0)     ' Verde para "Guardar"
+RGB(128, 0, 0)     ' Rojo para "Cancelar"
+RGB(128, 128, 128) ' Gris para "Cerrar"
+RGB(0, 0, 128)     ' Azul oscuro para títulos
+```
+
+#### Validación de Existencia de Formularios
+
+```vbscript
+Private Function FormularioExiste(objAccess, nombreFormulario) As Boolean
+    On Error Resume Next
+    Dim obj
+    For Each obj In objAccess.CurrentProject.AllForms
+        If obj.Name = nombreFormulario Then
+            FormularioExiste = True
+            Exit Function
+        End If
+    Next obj
+    FormularioExiste = False
+    On Error GoTo 0
+End Function
+```
+
+### Cierre Completo de Formularios
+
+```vbscript
+' Cerrar todos los formularios antes de cerrar Access
+Do While objAccess.Forms.Count > 0
+    objAccess.DoCmd.Close acForm, objAccess.Forms(0).Name, acSaveYes
+Loop
+
+' Cerrar todos los reportes
+Do While objAccess.Reports.Count > 0
+    objAccess.DoCmd.Close acReport, objAccess.Reports(0).Name, acSaveYes
+Loop
+```
+
+### Manejo de Eventos VBA Programático
+
+```vbscript
+' Obtener módulo del formulario y agregar código de eventos
+Set moduloFormulario = objAccess.Forms(nombreFormulario).Module
+
+' Código completo de eventos para botones
+codigoVBA = "Private Sub btnGuardar_Click()" & vbCrLf & _
+            "    MsgBox ""Datos guardados correctamente"", vbInformation, ""Guardar""" & vbCrLf & _
+            "End Sub" & vbCrLf & vbCrLf & _
+            "Private Sub btnCancelar_Click()" & vbCrLf & _
+            "    If MsgBox(""¿Desea cancelar los cambios?"", vbYesNo + vbQuestion, ""Cancelar"") = vbYes Then" & vbCrLf & _
+            "        DoCmd.Close acForm, Me.Name, acSaveNo" & vbCrLf & _
+            "    End If" & vbCrLf & _
+            "End Sub" & vbCrLf & vbCrLf & _
+            "Private Sub Form_Load()" & vbCrLf & _
+            "    Me.txtFechaRegistro = Date" & vbCrLf & _
+            "    Me.chkActivo = True" & vbCrLf & _
+            "    Me.cboCategoria.ListIndex = 0" & vbCrLf & _
+            "End Sub"
+
+moduloFormulario.InsertText codigoVBA
+```
+
+### Formularios Basados en Tablas Existentes
+
+```vbscript
+' Crear formulario automático basado en estructura de tabla
+Set rst = objAccess.CurrentDb.OpenRecordset(nombreTabla)
+Set frm = objAccess.CreateForm()
+frm.RecordSource = nombreTabla
+frm.Caption = "Formulario de " & nombreTabla
+
+x = 500: y = 500
+
+' Crear controles automáticamente para cada campo
+For Each fld In rst.Fields
+    ' Etiqueta del campo
+    Set ctlLabel = objAccess.CreateControl(frm.Name, acLabel, acDetail, "", "", _
+                                         x, y, 1500, 300)
+    ctlLabel.Caption = fld.Name & ":"
+    
+    ' Control vinculado al campo
+    Set ctlTextBox = objAccess.CreateControl(frm.Name, acTextBox, acDetail, "", fld.Name, _
+                                           x + 1700, y, 2500, 300)
+    ctlTextBox.Name = "txt" & fld.Name
+    
+    y = y + 500 ' Siguiente línea
+Next fld
+
+rst.Close
+```
+
+### Constantes Críticas para VBScript
+
+```vbscript
+' Constantes de tipos de control (para uso en VBScript)
+Const acTextBox = 109
+Const acLabel = 1004
+Const acCommandButton = 104
+Const acComboBox = 111
+Const acCheckBox = 106
+Const acOptionButton = 105
+Const acListBox = 110
+Const acImage = 103
+Const acRectangle = 102
+Const acLine = 101
+Const acSubform = 112
+Const acTabCtl = 123
+
+' Constantes de secciones
+Const acDetail = 0
+Const acHeader = 1
+Const acFooter = 2
+
+' Constantes de guardado
+Const acSaveYes = True
+Const acSaveNo = False
+Const acQuitSaveAll = 0
+Const acQuitSaveNone = 2
+```
+
+### Validaciones Críticas para Formularios
+
+```vbscript
+' Verificar que CreateControl solo funciona en Vista de Diseño
+' El formulario debe estar abierto durante la creación de controles
+
+' Validar existencia de tabla antes de crear formulario basado en datos
+On Error Resume Next
+Set rst = objAccess.CurrentDb.OpenRecordset(nombreTabla)
+If Err.Number <> 0 Then
+    WScript.Echo "ERROR: Tabla no existe: " & nombreTabla
+    Exit Sub
+End If
+On Error GoTo 0
+
+' Verificar nombres únicos de controles
+Private Function ControlExiste(objAccess, nombreFormulario, nombreControl) As Boolean
+    On Error Resume Next
+    Dim ctl
+    Set ctl = objAccess.Forms(nombreFormulario).Controls(nombreControl)
+    ControlExiste = (Err.Number = 0)
+    On Error GoTo 0
+End Function
+```
+
+### Sistema de Coordenadas y Medidas
+
+```vbscript
+' Sistema de coordenadas en twips (1440 twips = 1 pulgada)
+' Medidas estándar recomendadas:
+Const MARGEN_IZQUIERDO = 500
+Const POSICION_Y_INICIAL = 200
+Const ANCHO_ETIQUETA = 2000
+Const ANCHO_CONTROL = 2500
+Const ALTO_CONTROL = 300
+Const ESPACIO_VERTICAL = 300
+Const ESPACIO_HORIZONTAL = 200
+
+' Cálculo de posiciones
+x = MARGEN_IZQUIERDO
+y = POSICION_Y_INICIAL
+xControl = x + ANCHO_ETIQUETA + ESPACIO_HORIZONTAL
+
+' Para siguiente línea
+y = y + ALTO_CONTROL + ESPACIO_VERTICAL
+```
+
 ## 🚀 Próximos Pasos de Validación
 
 ### Tests Pendientes Identificados

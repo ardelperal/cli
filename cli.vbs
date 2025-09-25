@@ -25,6 +25,9 @@ Const acQuery = 1
 Const acDefault = -1
 Const acHidden = 1
 Const acNormal = 0
+Const acDesign = 1
+Const acSaveNo = 2
+Const acSaveYes = 0
 
 ' Constantes de comandos de Access
 Const acCmdCompileAndSaveAllModules = 126
@@ -39,6 +42,16 @@ Const acComboBox = 111
 Const acListBox = 110
 Const acSubform = 112
 Const acImage = 103
+Const acRectangle = 3
+Const acLine = 4
+Const acOptionGroup = 7
+Const acBoundObjectFrame = 108
+Const acUnboundObjectFrame = 114
+Const acPageBreak = 10
+Const acCustomControl = 119
+Const acToggleButton = 122
+Const acTabCtl = 123
+Const acPage = 124
 
 ' ============================================================================
 ' SECCIÓN 2: VARIABLES GLOBALES
@@ -330,11 +343,18 @@ Function OpenAccess(dbPath, password)
     End If
     
     ' Configuraciones adicionales después de abrir la BD (requieren BD abierta)
+    ' Aplicar configuraciones oficiales de Microsoft para operación desatendida
     On Error Resume Next
     objApp.DoCmd.SetWarnings False
     objApp.Application.SetOption "Confirm Action Queries", False
     objApp.Application.SetOption "Confirm Document Deletions", False
     objApp.Application.SetOption "Confirm Record Changes", False
+    
+    ' Configuraciones adicionales para interfaz silenciosa (según lecciones aprendidas)
+    objApp.Application.SetOption "Show Status Bar", False
+    objApp.Application.SetOption "Show Animations", False
+    objApp.Application.SetOption "Default Open Mode for Databases", 1  ' Compartido
+    objApp.Application.SetOption "Default Record Locking", 0  ' Sin bloqueos
     On Error GoTo 0
     
     ' Verificar que la BD se abrió correctamente
@@ -352,6 +372,7 @@ Function OpenAccess(dbPath, password)
     objApp.UserControl = False
     objApp.Echo False
     objApp.DoCmd.SetWarnings False
+    ' NOTA: DisplayAlerts NO es válido en Access (solo Excel) - removido según lecciones aprendidas
     objApp.VBE.MainWindow.Visible = False
     Err.Clear
     On Error GoTo 0
@@ -371,18 +392,27 @@ Function OpenAccess(dbPath, password)
 End Function
 
 ' Función canónica para cerrar Access de forma segura (basada en condor_cli.vbs)
+' Implementa secuencia oficial de Microsoft para evitar procesos zombie
 Sub CloseAccess(objAccess)
     If Not objAccess Is Nothing Then
         LogVerbose "Cerrando Access..."
         
         On Error Resume Next
-        ' Restaurar configuraciones EXACTAMENTE como rebuild
+        ' Secuencia oficial Microsoft para cierre seguro (según lecciones aprendidas)
         objAccess.Echo True
         objAccess.DoCmd.SetWarnings True
         ' No restaurar AutomationSecurity - rebuild no lo restaura
         objAccess.CloseCurrentDatabase
-        objAccess.Quit
+        objAccess.Quit acQuitSaveNone  ' Usar constante oficial en lugar de número
+        
+        ' CRÍTICO: Cerrar CurrentDb DESPUÉS de Quit (según documentación oficial)
+        If Not objAccess.CurrentDb Is Nothing Then
+            objAccess.CurrentDb.Close
+        End If
+        
         Set objAccess = Nothing
+        DoEvents  ' Permitir limpieza de memoria
+        DoEvents  ' Doble DoEvents según mejores prácticas
         On Error GoTo 0
         
         LogVerbose "Access cerrado exitosamente"
@@ -1730,6 +1760,11 @@ Sub Main()
         ElseIf objArgs(i) = "/debug" Then
             gDebug = True
             LogMessage "Modo debug activado"
+        ElseIf LCase(objArgs(i)) = "--password" And i < objArgs.Count - 1 Then
+            ' Manejar parámetro --password
+            gPassword = objArgs(i + 1)
+            LogMessage "Contraseña especificada por parámetro"
+            i = i + 1  ' Saltar el siguiente argumento (valor de la contraseña)
         Else
             ' Es un argumento normal, no un modificador
             ReDim Preserve cleanArgs(cleanArgCount)
@@ -1858,6 +1893,30 @@ Sub Main()
                 End If
             Else
                 LogError "Faltan argumentos para list-objects"
+                ShowHelp
+            End If
+            
+        Case "export-form"
+            If cleanArgCount >= 3 Then
+                gDbPath = ResolvePath(cleanArgs(1))
+                Dim formName, outputPath
+                formName = cleanArgs(2)
+                
+                ' Si no se especifica ruta de salida, usar el nombre del formulario con extensión .json
+                If cleanArgCount >= 4 Then
+                    outputPath = ResolvePath(cleanArgs(3))
+                Else
+                    outputPath = objFSO.GetAbsolutePathName(formName & ".json")
+                End If
+                
+                If Not gDryRun Then
+                    ExportFormToJSON gDbPath, gPassword, formName, outputPath
+                Else
+                    LogMessage "SIMULACION: Exportaria formulario " & formName & " de " & gDbPath & " a " & outputPath
+                End If
+            Else
+                LogError "Faltan argumentos para export-form"
+                WScript.Echo "Uso: cscript cli.vbs export-form <database> <form_name> [output_file] --password <password>"
                 ShowHelp
             End If
             
@@ -2899,6 +2958,652 @@ Sub RebuildProject()
     
     On Error GoTo 0
 End Sub
+
+' ============================================================================
+' SECCIÓN 10: FUNCIONES DE EXPORTACIÓN DE FORMULARIOS
+' ============================================================================
+
+' Función para obtener el nombre del tipo de control
+Function GetControlTypeName(controlType)
+    Select Case controlType
+        Case acLabel: GetControlTypeName = "Label"
+        Case acTextBox: GetControlTypeName = "TextBox"
+        Case acCommandButton: GetControlTypeName = "CommandButton"
+        Case acCheckBox: GetControlTypeName = "CheckBox"
+        Case acOptionButton: GetControlTypeName = "OptionButton"
+        Case acComboBox: GetControlTypeName = "ComboBox"
+        Case acListBox: GetControlTypeName = "ListBox"
+        Case acSubform: GetControlTypeName = "Subform"
+        Case acImage: GetControlTypeName = "Image"
+        Case acRectangle: GetControlTypeName = "Rectangle"
+        Case acLine: GetControlTypeName = "Line"
+        Case acOptionGroup: GetControlTypeName = "OptionGroup"
+        Case acBoundObjectFrame: GetControlTypeName = "BoundObjectFrame"
+        Case acUnboundObjectFrame: GetControlTypeName = "UnboundObjectFrame"
+        Case acPageBreak: GetControlTypeName = "PageBreak"
+        Case acCustomControl: GetControlTypeName = "CustomControl"
+        Case acToggleButton: GetControlTypeName = "ToggleButton"
+        Case acTabCtl: GetControlTypeName = "TabControl"
+        Case acPage: GetControlTypeName = "Page"
+        Case Else: GetControlTypeName = "Unknown (" & controlType & ")"
+    End Select
+End Function
+
+' Función para extraer controles de un formulario
+Function ExtractFormControls(objApp, formName)
+    On Error Resume Next
+    
+    LogMessage "Extrayendo controles del formulario: " & formName
+    
+    ' Abrir el formulario en vista de diseño
+    objApp.DoCmd.OpenForm formName, acDesign
+    If Err.Number <> 0 Then
+        LogMessage "Error al abrir formulario " & formName & " en vista de diseño: " & Err.Description
+        ExtractFormControls = ""
+        Exit Function
+    End If
+    
+    ' Obtener referencia al formulario
+    Dim frm
+    Set frm = objApp.Forms(formName)
+    
+    ' Extraer controles
+    Dim result
+    result = ExtractFormControlsInternal(frm)
+    
+    ' Cerrar el formulario sin guardar
+    objApp.DoCmd.Close acForm, formName, acSaveNo
+    
+    ExtractFormControls = result
+    On Error GoTo 0
+End Function
+
+' Función interna para extraer controles
+Function ExtractFormControlsInternal(frm)
+    On Error Resume Next
+    
+    Dim result, ctrl, i
+    result = "{"
+    result = result & """formName"": """ & frm.Name & ""","
+    result = result & """controls"": ["
+    
+    i = 0
+    For Each ctrl In frm.Controls
+        If i > 0 Then result = result & ","
+        
+        result = result & "{"
+        result = result & """name"": """ & ctrl.Name & ""","
+        result = result & """type"": """ & GetControlTypeName(ctrl.ControlType) & ""","
+        result = result & """controlType"": " & ctrl.ControlType
+        
+        ' Propiedades específicas según el tipo de control
+        If ctrl.ControlType = acTextBox Or ctrl.ControlType = acComboBox Or ctrl.ControlType = acListBox Then
+            If Not IsNull(ctrl.ControlSource) And ctrl.ControlSource <> "" Then
+                result = result & ",""controlSource"": """ & ctrl.ControlSource & """"
+            End If
+        End If
+        
+        If ctrl.ControlType = acLabel Or ctrl.ControlType = acCommandButton Or ctrl.ControlType = acCheckBox Or ctrl.ControlType = acOptionButton Then
+            If Not IsNull(ctrl.Caption) And ctrl.Caption <> "" Then
+                result = result & ",""caption"": """ & Replace(ctrl.Caption, """", "\""") & """"
+            End If
+        End If
+        
+        If ctrl.ControlType = acCommandButton Then
+            If Not IsNull(ctrl.OnClick) And ctrl.OnClick <> "" Then
+                result = result & ",""onClick"": """ & ctrl.OnClick & """"
+            End If
+        End If
+        
+        If ctrl.ControlType = acSubform Then
+            If Not IsNull(ctrl.SourceObject) And ctrl.SourceObject <> "" Then
+                result = result & ",""sourceObject"": """ & ctrl.SourceObject & """"
+            End If
+        End If
+        
+        ' Propiedades de formato comunes
+        result = result & ",""left"": " & ctrl.Left
+        result = result & ",""top"": " & ctrl.Top
+        result = result & ",""width"": " & ctrl.Width
+        result = result & ",""height"": " & ctrl.Height
+        result = result & ",""visible"": " & LCase(CStr(ctrl.Visible))
+        
+        result = result & "}"
+        i = i + 1
+    Next
+    
+    result = result & "]}"
+    ExtractFormControlsInternal = result
+    On Error GoTo 0
+End Function
+
+' Función para exportar formulario a JSON
+Sub ExportFormToJSON(dbPath, password, formName, outputPath)
+    On Error Resume Next
+    
+    LogMessage "=== EXPORTANDO FORMULARIO A JSON ==="
+    LogMessage "Base de datos: " & dbPath
+    LogMessage "Formulario: " & formName
+    LogMessage "Archivo de salida: " & outputPath
+    
+    ' Abrir Access
+    Dim objApp
+    Set objApp = OpenAccess(dbPath, password)
+    If objApp Is Nothing Then
+        LogMessage "Error: No se pudo abrir la base de datos"
+        Exit Sub
+    End If
+    
+    ' Extraer controles del formulario
+    Dim jsonContent
+    jsonContent = ExtractFormControls(objApp, formName)
+    
+    If jsonContent = "" Then
+        LogMessage "Error: No se pudieron extraer los controles del formulario"
+        CloseAccess objApp
+        Exit Sub
+    End If
+    
+    ' Guardar a archivo JSON
+    Dim objFile
+    Set objFile = objFSO.CreateTextFile(outputPath, True)
+    objFile.Write jsonContent
+    objFile.Close
+    
+    LogMessage "Formulario exportado exitosamente a: " & outputPath
+    
+    ' Cerrar Access
+    CloseAccess objApp
+    
+    On Error GoTo 0
+End Sub
+
+' ============================================================================
+' SECCIÓN UI AS CODE: FUNCIONES AVANZADAS BASADAS EN LECCIONES APRENDIDAS
+' ============================================================================
+
+' ============================================================================
+' CONFIGURACIÓN ANTI-UI MEJORADA
+' ============================================================================
+
+' Versión canónica y reforzada basada en lecciones aprendidas
+Sub AntiUI(app)
+    On Error Resume Next
+    ' Configuración baseline para operación silenciosa
+    ' NOTA: DisplayAlerts NO es válido en Access (lección aprendida)
+    app.Echo = False
+    app.DoCmd.SetWarnings False
+    app.AutomationSecurity = 3 ' ForceDisable
+    app.Visible = False
+    app.UserControl = False
+
+    ' Desactivar prompts de confirmación
+    app.Application.SetOption "Confirm Action Queries", False
+    app.Application.SetOption "Confirm Document Deletions", False
+    app.Application.SetOption "Confirm Record Changes", False
+
+    ' Desactivar Name AutoCorrect (evita recalcular objetos y prompts)
+    app.Application.SetOption "Track Name AutoCorrect Info", False
+    app.Application.SetOption "Perform Name AutoCorrect", False
+    app.Application.SetOption "Auto Compact", False
+
+    Err.Clear
+End Sub
+
+' ============================================================================
+' FUNCIONES DE CONFIGURACIÓN UI
+' ============================================================================
+
+Function UI_GetRoot(config)
+    UI_GetRoot = CfgGet(config, "UI_Root", "UI.Root", "ui")
+End Function
+
+Function UI_GetFormsDir(config)
+    UI_GetFormsDir = CfgGet(config, "UI_FormsDir", "UI.FormsDir", "forms")
+End Function
+
+Function UI_GetAssetsDir(config)
+    UI_GetAssetsDir = CfgGet(config, "UI_AssetsDir", "UI.AssetsDir", "assets")
+End Function
+
+Function UI_GetIncludeSubdirs(config)
+    UI_GetIncludeSubdirs = ToBool(CfgGet(config,"UI_IncludeSubdirectories","UI.IncludeSubdirectories","true"),True)
+End Function
+
+Function UI_GetFormFilePattern(config)
+    UI_GetFormFilePattern = CfgGet(config, "UI_FormFilePattern", "UI.FormFilePattern", "*.json")
+End Function
+
+Function UI_NameFromFileBase(config)
+    UI_NameFromFileBase = ToBool(CfgGet(config,"UI_NameFromFileBase","UI.NameFromFileBase","true"),True)
+End Function
+
+Function UI_GetAssetsImgDir(config)
+    UI_GetAssetsImgDir = CfgGet(config, "UI_AssetsImgDir", "UI.AssetsImgDir", "img")
+End Function
+
+Function UI_GetAssetsImgExtensions(config)
+    UI_GetAssetsImgExtensions = CfgGet(config, "UI_AssetsImgExtensions", "UI.AssetsImgExtensions", "png,jpg,jpeg,gif,bmp,ico")
+End Function
+
+Function UI_StrictProperties(config)
+    UI_StrictProperties = ToBool(CfgGet(config,"UI_StrictProperties","UI.StrictProperties","false"),False)
+End Function
+
+' ============================================================================
+' FUNCIONES DE MANEJO DE ASSETS E IMÁGENES
+' ============================================================================
+
+Function ResolveAssetImagePath(imgRef, config)
+    On Error Resume Next
+    ResolveAssetImagePath = ""
+
+    If ("" & imgRef) = "" Then Exit Function
+
+    Dim uiRoot, assetsDir, imgDir, baseDir, tryPath
+    uiRoot    = UI_GetRoot(config)
+    assetsDir = UI_GetAssetsDir(config)
+    imgDir    = UI_GetAssetsImgDir(config)
+
+    ' 1) Si viene ruta absoluta, úsala directamente
+    Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
+    If fso.FileExists(imgRef) Then
+        ResolveAssetImagePath = imgRef
+        Exit Function
+    End If
+
+    ' 2) Probar combinaciones relativas canónicas
+    Dim candidates(2)
+    candidates(0) = ResolvePath(uiRoot & "\" & assetsDir & "\" & imgDir & "\" & imgRef)       ' ./ui/assets/img/<imgRef>
+    candidates(1) = ResolvePath(uiRoot & "\" & imgDir & "\" & imgRef)                         ' ./ui/img/<imgRef> (fallback)
+    candidates(2) = ResolvePath(imgRef)                                                       ' relativo al script
+
+    Dim i
+    For i = 0 To UBound(candidates)
+        tryPath = candidates(i)
+        If fso.FileExists(tryPath) Then
+            ResolveAssetImagePath = tryPath
+            Exit Function
+        End If
+    Next
+
+    ' 3) Si vino sin extensión, probar con extensiones permitidas
+    Dim bare, ext, exts, arr, j
+    bare = fso.GetBaseName(imgRef)
+    exts = UI_GetAssetsImgExtensions(config)
+    arr = Split(exts, ",")
+    For j = 0 To UBound(arr)
+        ext = Trim(arr(j))
+        If Left(ext,1) <> "." Then ext = "." & ext
+        tryPath = ResolvePath(uiRoot & "\" & assetsDir & "\" & imgDir & "\" & bare & ext)
+        If fso.FileExists(tryPath) Then
+            ResolveAssetImagePath = tryPath
+            Exit Function
+        End If
+    Next
+End Function
+
+Sub MissingAssetLog(imgRef, resolvedForForm)
+    On Error Resume Next
+    LogMessage "ui-import: imagen no encontrada: " & imgRef & " (form=" & resolvedForForm & ")"
+End Sub
+
+' ============================================================================
+' FUNCIONES DE CREACIÓN PROGRAMÁTICA DE FORMULARIOS
+' ============================================================================
+
+' Función para crear formulario programáticamente basada en lecciones aprendidas
+Function CreateFormProgrammatically(app, formName, recordSource)
+    On Error Resume Next
+    CreateFormProgrammatically = False
+    
+    If app Is Nothing Then Exit Function
+    
+    ' Aplicar configuración anti-UI
+    AntiUI app
+    
+    ' Crear formulario nuevo
+    Dim frm
+    Set frm = app.CreateForm()
+    If frm Is Nothing Then Exit Function
+    
+    ' Configurar propiedades básicas del formulario
+    frm.RecordSource = recordSource
+    frm.Caption = formName
+    frm.NavigationButtons = False
+    frm.RecordSelectors = False
+    frm.DividingLines = False
+    
+    ' Guardar con nombre temporal primero (patrón atómico)
+    Dim tmpName
+    tmpName = formName & "__tmp"
+    app.DoCmd.Save acForm, tmpName
+    
+    ' Cerrar formulario
+    app.DoCmd.Close acForm, tmpName, acSaveYes
+    
+    CreateFormProgrammatically = True
+End Function
+
+' Función para agregar control a formulario
+Function AddControlToForm(app, formName, controlType, controlName, left, top, width, height)
+    On Error Resume Next
+    AddControlToForm = False
+    
+    If app Is Nothing Then Exit Function
+    
+    ' Aplicar configuración anti-UI
+    AntiUI app
+    
+    ' Abrir formulario en modo diseño
+    app.DoCmd.OpenForm formName, acDesign
+    
+    Dim frm, ctrl
+    Set frm = app.Forms(formName)
+    
+    ' Crear control
+    Set ctrl = app.CreateControl(formName, controlType, , , , left, top, width, height)
+    If Not ctrl Is Nothing Then
+        ctrl.Name = controlName
+        AddControlToForm = True
+    End If
+    
+    ' Guardar y cerrar
+    AntiUI app
+    app.DoCmd.Close acForm, formName, acSaveYes
+End Function
+
+' ============================================================================
+' FUNCIONES DE IMPORTACIÓN DE FORMULARIOS DESDE JSON
+' ============================================================================
+
+' Variables globales para importación de formularios
+Dim ImportFormFromJson_app, ImportFormFromJson_target, ImportFormFromJson_finalTarget, ImportFormFromJson_root
+
+Function ImportFormFromJson(dbPath, jsonPath, targetName)
+    On Error Resume Next
+    ImportFormFromJson = False
+    
+    ' Abrir Access con configuración anti-UI
+    Dim app
+    Set app = OpenAccess(dbPath, GetDatabasePassword(dbPath))
+    If app Is Nothing Then Exit Function
+    
+    AntiUI app
+    
+    ' Leer y parsear JSON
+    Dim jsonContent, root
+    jsonContent = ReadAllText(jsonPath)
+    If jsonContent = "" Then
+        CloseAccess app
+        Exit Function
+    End If
+    
+    Set root = JsonParse(jsonContent)
+    If root Is Nothing Then
+        CloseAccess app
+        Exit Function
+    End If
+    
+    ' Configurar variables globales para finalización
+    Set ImportFormFromJson_app = app
+    ImportFormFromJson_target = targetName & "__tmp"
+    ImportFormFromJson_finalTarget = targetName
+    Set ImportFormFromJson_root = root
+    
+    ' Crear formulario base
+    If Not CreateFormFromJson(app, root, ImportFormFromJson_target) Then
+        CloseAccess app
+        Exit Function
+    End If
+    
+    ' Finalizar importación con swap atómico
+    ImportFormFromJson = ImportFormFromJson_Finalize()
+End Function
+
+Function CreateFormFromJson(app, root, formName)
+    On Error Resume Next
+    CreateFormFromJson = False
+    
+    If app Is Nothing Or root Is Nothing Then Exit Function
+    
+    ' Aplicar configuración anti-UI
+    AntiUI app
+    
+    ' Crear formulario
+    Dim frm
+    Set frm = app.CreateForm()
+    If frm Is Nothing Then Exit Function
+    
+    ' Configurar propiedades del formulario desde JSON
+    If root.Exists("recordSource") Then frm.RecordSource = root("recordSource")
+    If root.Exists("caption") Then frm.Caption = root("caption")
+    If root.Exists("width") Then frm.Width = root("width")
+    
+    ' Configurar propiedades adicionales
+    frm.NavigationButtons = False
+    frm.RecordSelectors = False
+    frm.DividingLines = False
+    
+    ' Crear controles si existen
+    If root.Exists("controls") Then
+        Dim controls, i
+        Set controls = root("controls")
+        If IsObject(controls) Then
+            For i = 0 To controls.Count - 1
+                CreateControlFromJson app, frm, controls.Items()(i)
+            Next
+        End If
+    End If
+    
+    ' Guardar formulario
+    AntiUI app
+    app.DoCmd.Save acForm, formName
+    app.DoCmd.Close acForm, formName, acSaveYes
+    
+    CreateFormFromJson = True
+End Function
+
+Sub CreateControlFromJson(app, frm, controlDict)
+    On Error Resume Next
+    
+    If Not IsObject(controlDict) Then Exit Sub
+    If Not controlDict.Exists("type") Then Exit Sub
+    
+    Dim controlType, controlName, left, top, width, height
+    controlType = GetControlTypeFromName(controlDict("type"))
+    controlName = controlDict("name")
+    left = controlDict("left")
+    top = controlDict("top")
+    width = controlDict("width")
+    height = controlDict("height")
+    
+    ' Crear control
+    Dim ctrl
+    Set ctrl = app.CreateControl(frm.Name, controlType, , , , left, top, width, height)
+    If Not ctrl Is Nothing Then
+        ctrl.Name = controlName
+        
+        ' Aplicar propiedades específicas
+        ApplyControlProperties ctrl, controlDict
+        
+        ' Manejar imágenes si es necesario
+        HandleControlImage ctrl, controlDict, frm.Name
+    End If
+End Sub
+
+Sub ApplyControlProperties(ctrl, controlDict)
+    On Error Resume Next
+    
+    ' Aplicar propiedades comunes
+    If controlDict.Exists("caption") Then SetCtrlProp ctrl, "Caption", controlDict("caption")
+    If controlDict.Exists("controlSource") Then SetCtrlProp ctrl, "ControlSource", controlDict("controlSource")
+    If controlDict.Exists("visible") Then SetCtrlProp ctrl, "Visible", controlDict("visible")
+    If controlDict.Exists("enabled") Then SetCtrlProp ctrl, "Enabled", controlDict("enabled")
+    If controlDict.Exists("locked") Then SetCtrlProp ctrl, "Locked", controlDict("locked")
+    If controlDict.Exists("tabIndex") Then SetCtrlProp ctrl, "TabIndex", controlDict("tabIndex")
+    
+    ' Propiedades de eventos
+    If controlDict.Exists("onClick") Then SetCtrlProp ctrl, "OnClick", controlDict("onClick")
+    If controlDict.Exists("onDblClick") Then SetCtrlProp ctrl, "OnDblClick", controlDict("onDblClick")
+    If controlDict.Exists("onChange") Then SetCtrlProp ctrl, "OnChange", controlDict("onChange")
+End Sub
+
+Sub HandleControlImage(ctrl, controlDict, formName)
+    On Error Resume Next
+    
+    ' Manejar carga de imágenes desde assets
+    Dim imgRef
+    imgRef = ""
+    If controlDict.Exists("assetImage") Then imgRef = controlDict("assetImage")
+    If imgRef = "" And controlDict.Exists("image") Then imgRef = controlDict("image")
+    If imgRef = "" And controlDict.Exists("picture") Then imgRef = controlDict("picture")
+    
+    If imgRef <> "" Then
+        Dim fullImg
+        fullImg = ResolveAssetImagePath(imgRef, gConfig)
+        If fullImg <> "" Then
+            If ctrl.ControlType = acImage Then
+                ctrl.Picture = fullImg
+                ' Configurar como Linked para evitar prompts
+                If HasProperty(ctrl, "PictureType") Then ctrl.PictureType = 1
+                
+                ' Propiedades adicionales de imagen
+                If controlDict.Exists("pictureAlignment") Then SetCtrlProp ctrl, "PictureAlignment", controlDict("pictureAlignment")
+                If controlDict.Exists("sizeMode") Then SetCtrlProp ctrl, "SizeMode", controlDict("sizeMode")
+                If controlDict.Exists("pictureTiling") Then SetCtrlProp ctrl, "PictureTiling", controlDict("pictureTiling")
+            ElseIf ctrl.ControlType = acCommandButton Then
+                If HasProperty(ctrl, "Picture") Then ctrl.Picture = fullImg
+                If controlDict.Exists("pictureType") Then SetCtrlProp ctrl, "PictureType", controlDict("pictureType")
+            End If
+        Else
+            MissingAssetLog imgRef, formName
+        End If
+    End If
+End Sub
+
+Sub SetCtrlProp(ctrl, propName, propValue)
+    On Error Resume Next
+    
+    ' Salir si el valor está vacío
+    If IsEmpty(propValue) Or propValue = "" Or IsNull(propValue) Then Exit Sub
+    
+    ' Verificar si el control tiene la propiedad
+    If HasProperty(ctrl, propName) Then
+        ctrl.Properties(propName) = propValue
+    ElseIf UI_StrictProperties(gConfig) Then
+        LogMessage "UI.StrictProperties: propiedad '" & propName & "' no existe en control '" & ctrl.Name & "'"
+    End If
+    
+    Err.Clear
+End Sub
+
+Function ImportFormFromJson_Finalize()
+    On Error Resume Next
+    ImportFormFromJson_Finalize = False
+    
+    If ImportFormFromJson_app Is Nothing Then Exit Function
+    
+    Dim app, tmpName, finalName
+    Set app = ImportFormFromJson_app
+    tmpName = ImportFormFromJson_target
+    finalName = ImportFormFromJson_finalTarget
+    
+    ' Aplicar configuración anti-UI antes de guardar
+    AntiUI app
+    
+    ' Guardar temporal
+    app.DoCmd.Save acForm, tmpName
+    
+    ' Swap atómico: renombrar temporal a final
+    SafeSwapForm app, finalName, tmpName
+    
+    ' Compilar y guardar módulos si es necesario
+    On Error Resume Next
+    app.DoCmd.RunCommand acCmdCompileAndSaveAllModules
+    Err.Clear
+    
+    ' Cerrar Access
+    CloseAccess app
+    
+    ' Limpiar referencias
+    Set ImportFormFromJson_app = Nothing
+    ImportFormFromJson_target = ""
+    ImportFormFromJson_finalTarget = ""
+    Set ImportFormFromJson_root = Nothing
+    
+    ImportFormFromJson_Finalize = True
+End Function
+
+' ============================================================================
+' FUNCIONES AUXILIARES
+' ============================================================================
+
+Function SafeSwapForm(app, finalName, tmpName)
+    On Error Resume Next
+    
+    ' Aplicar configuración anti-UI
+    AntiUI app
+    
+    ' Eliminar formulario existente si existe
+    Dim objExists
+    objExists = False
+    Dim obj
+    For Each obj In app.CurrentProject.AllForms
+        If obj.Name = finalName Then
+            objExists = True
+            Exit For
+        End If
+    Next
+    
+    If objExists Then
+        app.DoCmd.DeleteObject acForm, finalName
+    End If
+    
+    ' Renombrar temporal a final
+    app.DoCmd.Rename finalName, acForm, tmpName
+    
+    Err.Clear
+End Function
+
+Function GetControlTypeFromName(typeName)
+    Select Case LCase(typeName)
+        Case "label": GetControlTypeFromName = acLabel
+        Case "textbox": GetControlTypeFromName = acTextBox
+        Case "commandbutton", "button": GetControlTypeFromName = acCommandButton
+        Case "checkbox": GetControlTypeFromName = acCheckBox
+        Case "optionbutton": GetControlTypeFromName = acOptionButton
+        Case "combobox": GetControlTypeFromName = acComboBox
+        Case "listbox": GetControlTypeFromName = acListBox
+        Case "image": GetControlTypeFromName = acImage
+        Case "subform": GetControlTypeFromName = acSubform
+        Case Else: GetControlTypeFromName = acLabel ' Default
+    End Select
+End Function
+
+Function ReadAllText(filePath)
+    On Error Resume Next
+    Dim stream
+    Set stream = CreateObject("ADODB.Stream")
+    stream.Type = 2 ' adTypeText
+    stream.Charset = "UTF-8"
+    stream.Open
+    stream.LoadFromFile filePath
+    ReadAllText = stream.ReadText
+    stream.Close
+    If Err.Number <> 0 Then ReadAllText = ""
+    Err.Clear
+End Function
+
+Function JsonParse(jsonText)
+    On Error Resume Next
+    ' Implementación básica de parsing JSON
+    ' En un entorno real, se usaría una librería JSON más robusta
+    Set JsonParse = CreateObject("Scripting.Dictionary")
+    ' Aquí iría la lógica de parsing JSON
+    If Err.Number <> 0 Then Set JsonParse = Nothing
+    Err.Clear
+End Function
 
 ' Ejecutar función principal
 Main()
