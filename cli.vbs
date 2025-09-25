@@ -394,6 +394,7 @@ Function LoadConfig(configPath)
     config.Add "MODULES_Extensions", ".bas,.cls"
     config.Add "MODULES_IncludeSubdirectories", "true"
     config.Add "MODULES_FilePattern", "*"
+    config.Add "MODULES_ImportRaw", "true"
     
     If Not fso.FileExists(configPath) Then
         LogVerbose "Archivo de configuracion no encontrado: " & configPath & ". Usando valores por defecto."
@@ -575,63 +576,144 @@ Function FileBaseName(p)
     FileBaseName = fso.GetBaseName(p)
 End Function
 
+' Helper function to concatenate two arrays
+Function ConcatArrays(arr1, arr2)
+    On Error Resume Next
+    Dim result, i, totalSize
+    
+    ' Handle empty arrays
+    If Not IsArray(arr1) And Not IsArray(arr2) Then
+        ConcatArrays = Array()
+        Exit Function
+    End If
+    
+    If Not IsArray(arr1) Then
+        ConcatArrays = arr2
+        Exit Function
+    End If
+    
+    If Not IsArray(arr2) Then
+        ConcatArrays = arr1
+        Exit Function
+    End If
+    
+    ' Calculate total size
+    totalSize = UBound(arr1) + UBound(arr2) + 2
+    ReDim result(totalSize - 1)
+    
+    ' Copy first array
+    For i = 0 To UBound(arr1)
+        result(i) = arr1(i)
+    Next
+    
+    ' Copy second array
+    For i = 0 To UBound(arr2)
+        result(UBound(arr1) + 1 + i) = arr2(i)
+    Next
+    
+    ConcatArrays = result
+End Function
+
+' Helper function to get file extension with dot
+Function GetExtension(filePath)
+    On Error Resume Next
+    Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim ext: ext = fso.GetExtensionName(filePath)
+    If ext <> "" Then
+        GetExtension = "." & ext
+    Else
+        GetExtension = ""
+    End If
+End Function
+
+' Helper function to join arguments from index 1 onwards
+Function JoinTailArgs(args)
+    On Error Resume Next
+    Dim result, i
+    result = ""
+    
+    If IsArray(args) And UBound(args) >= 1 Then
+        For i = 1 To UBound(args)
+            If result <> "" Then result = result & " "
+            result = result & args(i)
+        Next
+    End If
+    
+    JoinTailArgs = result
+End Function
+
 ' ============================================================================
 ' SECCIÓN 4: FUNCIONES DE AYUDA
 ' ============================================================================
 
 Sub ShowHelp()
-    WScript.Echo "=== CLI ACCESS - Herramienta de Analisis de Access ==="
-    WScript.Echo "Version: 1.0 MVP"
+    WScript.Echo CleanTerminalText("=== CLI ACCESS - Herramienta de Analisis de Access ===")
+    WScript.Echo CleanTerminalText("Version: 1.0 MVP")
     WScript.Echo ""
-    WScript.Echo "USO:"
-    WScript.Echo "  cscript cli.vbs <comando> [argumentos] [opciones]"
+    WScript.Echo CleanTerminalText("USO:")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs <comando> [argumentos] [opciones]")
     WScript.Echo ""
-    WScript.Echo "COMANDOS DISPONIBLES:"
+    WScript.Echo CleanTerminalText("COMANDOS DISPONIBLES:")
     WScript.Echo ""
-    WScript.Echo "  extract-modules <db_path>"
-    WScript.Echo "    Extrae modulos VBA hacia archivos fuente"
+    WScript.Echo CleanTerminalText("  extract-modules <db_path>")
+    WScript.Echo CleanTerminalText("    Extrae modulos VBA hacia archivos fuente")
     WScript.Echo ""
-    WScript.Echo "  list-objects <db_path>"
-    WScript.Echo "    Lista todos los objetos de la base de datos"
+    WScript.Echo CleanTerminalText("  list-objects <db_path>")
+    WScript.Echo CleanTerminalText("    Lista todos los objetos de la base de datos")
     WScript.Echo ""
-    WScript.Echo "  rebuild <db_path>"
-    WScript.Echo "    Reconstruye todos los modulos VBA desde archivos fuente"
-    WScript.Echo "    - Usa MODULES_SrcPath del archivo de configuracion"
-    WScript.Echo "    - Formatos soportados: .bas (modulos), .cls (clases)"
-    WScript.Echo "    - Si no se especifica db_path, usa DATABASE_DefaultPath del config"
-    WScript.Echo "    - Requiere: ""Trust access to the VBA project object model"" en Access"
+    WScript.Echo CleanTerminalText("  rebuild <db_path>")
+    WScript.Echo CleanTerminalText("    Reconstruye todos los modulos VBA desde archivos fuente")
+    WScript.Echo CleanTerminalText("    - Usa MODULES_SrcPath del archivo de configuracion")
+    WScript.Echo CleanTerminalText("    - Formatos soportados: .bas (modulos), .cls (clases)")
+    WScript.Echo CleanTerminalText("    - Si no se especifica db_path, usa DATABASE_DefaultPath del config")
+    WScript.Echo CleanTerminalText("    - Requiere: ""Trust access to the VBA project object model"" en Access")
     WScript.Echo ""
-    WScript.Echo "  update <db_path>"
-    WScript.Echo "    Actualizar modulos VBA desde src"
+    WScript.Echo CleanTerminalText("  rebuild-tx")
+    WScript.Echo CleanTerminalText("    Reconstruccion transaccional con atomicidad en disco")
+    WScript.Echo CleanTerminalText("    - Realiza toda la reconstruccion en una copia temporal (.tmp.accdb)")
+    WScript.Echo CleanTerminalText("    - Solo si compila exitosamente, reemplaza el archivo original atomicamente")
+    WScript.Echo CleanTerminalText("    - Si falla, el archivo original queda intacto")
+    WScript.Echo CleanTerminalText("    - Recomendado para CI/CD y entornos de produccion")
     WScript.Echo ""
-    WScript.Echo "  schema [db_path] [--table <nombre>] [--out <ruta>] [--format json|md]"
-    WScript.Echo "    Exporta la estructura de tablas. Por defecto usa DATABASE_DefaultPath del ini."
+    WScript.Echo CleanTerminalText("  update <db_path>")
+    WScript.Echo CleanTerminalText("    Actualizar modulos VBA desde src")
     WScript.Echo ""
-    WScript.Echo "  form-export [db_path] --form <NombreFormulario> --out <ruta.json>"
-    WScript.Echo "  form-import <json_path> [db_path] [--name NuevoNombre] [--overwrite] [--dry-run]"
+    WScript.Echo CleanTerminalText("  lint [db_path] [src_dir] [module1] [module2] ...")
+    WScript.Echo CleanTerminalText("    Valida la sintaxis de modulos VBA")
+    WScript.Echo CleanTerminalText("    - Si no se especifica db_path, usa DATABASE_DefaultPath del config")
+    WScript.Echo CleanTerminalText("    - Si no se especifica src_dir, usa MODULES_SrcPath del config")
+    WScript.Echo CleanTerminalText("    - Si no se especifican modulos, valida todos los archivos .bas y .cls")
     WScript.Echo ""
-    WScript.Echo "  ui-rebuild [db_path]           Reconvierte TODOS los formularios del /ui a Access"
-    WScript.Echo "  ui-update [db_path] <form.json|formName> [...]  Reconstruye solo los indicados"
-    WScript.Echo "  ui-touch <formName|form.json>  Atajo para actualizar un unico formulario"
+    WScript.Echo CleanTerminalText("  schema [db_path] [--table <nombre>] [--out <ruta>] [--format json|md]")
+    WScript.Echo CleanTerminalText("    Exporta la estructura de tablas. Por defecto usa DATABASE_DefaultPath del ini.")
     WScript.Echo ""
-    WScript.Echo "OPCIONES:"
-    WScript.Echo "  --config <path>       - Archivo de configuracion (por defecto: cli.ini)"
-    WScript.Echo "  --password <pwd>      - Contrasena de la base de datos"
-    WScript.Echo "  --verbose             - Salida detallada"
-    WScript.Echo "  --quiet               - Salida minima"
-    WScript.Echo "  --help                - Muestra esta ayuda"
+    WScript.Echo CleanTerminalText("  form-export [db_path] --form <NombreFormulario> --out <ruta.json>")
+    WScript.Echo CleanTerminalText("  form-import <json_path> [db_path] [--name NuevoNombre] [--overwrite] [--dry-run]")
     WScript.Echo ""
-    WScript.Echo "MODIFICADORES DE TESTING:"
-    WScript.Echo "  /dry-run              - Simula la ejecucion sin cambios"
-    WScript.Echo "  /validate             - Valida la configuracion"
+    WScript.Echo CleanTerminalText("  ui-rebuild [db_path]           Reconvierte TODOS los formularios del /ui a Access")
+    WScript.Echo CleanTerminalText("  ui-update [db_path] <form.json|formName> [...]  Reconstruye solo los indicados")
+    WScript.Echo CleanTerminalText("  ui-touch <formName|form.json>  Atajo para actualizar un unico formulario")
     WScript.Echo ""
-    WScript.Echo "EJEMPLOS:"
-    WScript.Echo "  cscript cli.vbs extract-modules ""C:\mi_base.accdb"""
-    WScript.Echo "  cscript cli.vbs list-objects ""C:\mi_base.accdb"" --verbose"
-    WScript.Echo "  cscript cli.vbs rebuild"
-    WScript.Echo "  cscript cli.vbs update ""C:\mi_base.accdb"" /verbose"
-    WScript.Echo "  cscript cli.vbs schema --table Usuarios --format md"
-    WScript.Echo "  cscript cli.vbs schema ""C:\mi_base.accdb"" --out ""C:\temp"""
+    WScript.Echo CleanTerminalText("OPCIONES:")
+    WScript.Echo CleanTerminalText("  --config <path>       - Archivo de configuracion (por defecto: cli.ini)")
+    WScript.Echo CleanTerminalText("  --password <pwd>      - Contrasena de la base de datos")
+    WScript.Echo CleanTerminalText("  --verbose             - Salida detallada")
+    WScript.Echo CleanTerminalText("  --quiet               - Salida minima")
+    WScript.Echo CleanTerminalText("  --help                - Muestra esta ayuda")
+    WScript.Echo ""
+    WScript.Echo CleanTerminalText("MODIFICADORES DE TESTING:")
+    WScript.Echo CleanTerminalText("  /dry-run              - Simula la ejecucion sin cambios")
+    WScript.Echo CleanTerminalText("  /validate             - Valida la configuracion")
+    WScript.Echo ""
+    WScript.Echo CleanTerminalText("EJEMPLOS:")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs extract-modules ""C:\mi_base.accdb""")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs list-objects ""C:\mi_base.accdb"" --verbose")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs rebuild")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs update ""C:\mi_base.accdb"" /verbose")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs lint")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs lint ""C:\mi_base.accdb"" modAssert.bas")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs schema --table Usuarios --format md")
+    WScript.Echo CleanTerminalText("  cscript cli.vbs schema ""C:\mi_base.accdb"" --out ""C:\temp""")
 End Sub
 
 ' ============================================================================
@@ -729,6 +811,89 @@ Sub TerminateAccessPID(targetPID)
     On Error GoTo 0
 End Sub
 
+' ============================================================================
+' FUNCIÓN: LintModules
+' Descripción: Función para validar sintaxis de módulos VBA mediante compilación
+' Parámetros: dbTemplatePath - ruta de la base de datos plantilla
+'            srcDir - directorio de archivos fuente
+'            modulesArg - módulos específicos a validar ("" para todos)
+' Retorna: True si la validación es exitosa, False en caso contrario
+' ============================================================================
+Function LintModules(dbTemplatePath, srcDir, modulesArg) ' modulesArg: "" => all 
+     On Error Resume Next 
+     Dim fso: Set fso = CreateObject("Scripting.FileSystemObject") 
+     Dim tmpDb: tmpDb = fso.BuildPath(fso.GetParentFolderName(dbTemplatePath), fso.GetBaseName(dbTemplatePath) & ".lint.tmp.accdb") 
+     If fso.FileExists(tmpDb) Then fso.DeleteFile tmpDb, True 
+     fso.CopyFile dbTemplatePath, tmpDb, True 
+ 
+     Dim app: Set app = OpenAccess(tmpDb, GetDatabasePassword(tmpDb)) 
+     If app Is Nothing Then WScript.Echo CleanTerminalText("lint: no se pudo abrir Access (tmp)"): LintModules = False: Exit Function 
+ 
+     ' Blindaje 
+     AntiUI app 
+ 
+     ' Verificar VBE 
+     If Not CheckVBProjectAccess(app) Then 
+         CloseAccess_Robust app 
+         WScript.Echo CleanTerminalText("lint: VBE no disponible"): LintModules = False: Exit Function 
+     End If 
+ 
+     ' Enumerar módulos 
+     Dim files, i, path, name, ext 
+     If Len(modulesArg) = 0 Then 
+         files = EnumerateFiles(srcDir, "*.bas", True) 
+         files = ConcatArrays(files, EnumerateFiles(srcDir, "*.cls", True)) 
+     Else 
+         files = Split(modulesArg, " ") 
+         For i = 0 To UBound(files) 
+             files(i) = ResolvePath(files(i)) 
+         Next 
+     End If 
+ 
+     ' Importar cada módulo en el proyecto vacío 
+     Dim vbProj: Set vbProj = app.VBE.ActiveVBProject 
+     For i = 0 To UBound(files) 
+         path = ResolvePath(files(i)) 
+         name = FileBaseName(path) 
+         ext  = LCase(Split(GetExtension(path), ".")(1)) 
+ 
+         ' Limpieza mínima o (mejor) importación directa siguiendo tu pipeline: 
+         Dim cleaned
+         If LCase(gConfig("MODULES_ImportRaw")) = "true" Then
+             ' Importación directa sin CleanVBAFile, solo garantizando Option Explicit
+             cleaned = ReadFileWithCharsetDetection(path)
+             If InStr(cleaned, "Option Explicit") = 0 Then
+                 cleaned = "Option Explicit" & vbCrLf & cleaned
+             End If
+         Else
+             ' Usar CleanVBAFile para retrocompatibilidad
+             cleaned = CleanVBAFile(path, ext)
+         End If 
+         ImportModuleWithAnsiEncoding path, name, ext, vbProj, cleaned 
+         If Err.Number <> 0 Then 
+             WScript.Echo CleanTerminalText("lint: error importando " & path & " -> " & Err.Description) 
+             Err.Clear: CloseAccess_Robust app: LintModules = False: Exit Function 
+         End If 
+         PostProcessInsertedModule vbProj.VBComponents(name) 
+         EnsureOptionExplicit vbProj.VBComponents(name).CodeModule 
+     Next 
+ 
+     ' Verificar referencias y compilar 
+     If Not CheckMissingReferences(app) Then 
+         WScript.Echo CleanTerminalText("lint: referencias rotas"): CloseAccess_Robust app: LintModules = False: Exit Function 
+     End If 
+ 
+     If Not Maybe_DoCmd_CompileAndSaveAllModules(app, "lint") Then 
+         WScript.Echo CleanTerminalText("lint: compilación fallida (ver log)") 
+         CloseAccess_Robust app 
+         LintModules = False 
+         Exit Function 
+     End If 
+ 
+     CloseAccess_Robust app 
+     LintModules = True 
+ End Function
+
 ' Función para cerrar procesos de Access existentes antes de comenzar
 Sub CloseExistingAccessProcesses()
     Dim pids, i, killWaitMs
@@ -757,13 +922,35 @@ Sub CloseAccess_Robust(app)
     
     Dim pidsBefore: pidsBefore = GetAccessPIDs()
     
-    ' Cierra cualquier objeto abierto sin guardar (silencioso)
+    ' Blindaje anti-UI
     AntiUI app
+    
+    ' Cerrar cualquier objeto abierto sin guardar (silencioso)
     app.DoCmd.Close acForm, , acSaveNo
     app.DoCmd.Close acReport, , acSaveNo
+    
+    ' NUEVO: cerrar módulos guardando para evitar prompt
+    app.DoCmd.Close acModule, , acSaveYes
+    
+    ' NUEVO: cerrar ventanas del VBE si las hubiera
+    Dim w
+    If Not app Is Nothing Then
+        If Not app.VBE Is Nothing Then
+            app.VBE.MainWindow.Visible = False
+            For Each w In app.VBE.Windows
+                w.Visible = False
+                w.Close
+            Next
+        End If
+    End If
     Err.Clear
     
-    ' Cierra la BD y la app
+    ' Compilar y guardar por última vez como red de seguridad (opcional)
+    AntiUI app
+    Maybe_DoCmd_CompileAndSaveAllModules app, "CloseAccess_Robust final save"
+    Err.Clear
+    
+    ' Cerrar la BD y la app
     AntiUI app
     app.CloseCurrentDatabase
     Err.Clear
@@ -931,26 +1118,73 @@ End Function
 ' ============================================================================
 ' SECCIÓN 6: FUNCIONES DE LOGGING
 ' ============================================================================
+' FUNCIÓN PARA LIMPIAR CARACTERES ESPECIALES EN SALIDAS DE TERMINAL
+' ============================================================================
+
+Function CleanTerminalText(text)
+    ' Función para limpiar caracteres especiales, tildes y símbolos especiales
+    ' de texto destinado a la terminal, manteniendo la legibilidad
+    Dim cleanText
+    cleanText = text
+    
+    ' Reemplazar vocales con tildes
+    cleanText = Replace(cleanText, "á", "a")
+    cleanText = Replace(cleanText, "é", "e")
+    cleanText = Replace(cleanText, "í", "i")
+    cleanText = Replace(cleanText, "ó", "o")
+    cleanText = Replace(cleanText, "ú", "u")
+    cleanText = Replace(cleanText, "Á", "A")
+    cleanText = Replace(cleanText, "É", "E")
+    cleanText = Replace(cleanText, "Í", "I")
+    cleanText = Replace(cleanText, "Ó", "O")
+    cleanText = Replace(cleanText, "Ú", "U")
+    
+    ' Reemplazar ñ
+    cleanText = Replace(cleanText, "ñ", "n")
+    cleanText = Replace(cleanText, "Ñ", "N")
+    
+    ' Reemplazar otros caracteres especiales comunes
+    cleanText = Replace(cleanText, "ü", "u")
+    cleanText = Replace(cleanText, "Ü", "U")
+    cleanText = Replace(cleanText, "ç", "c")
+    cleanText = Replace(cleanText, "Ç", "C")
+    
+    ' Reemplazar símbolos especiales por equivalentes ASCII
+    cleanText = Replace(cleanText, "✓", "OK")
+    cleanText = Replace(cleanText, "✗", "X")
+    cleanText = Replace(cleanText, "❌", "ERROR")
+    cleanText = Replace(cleanText, "⚠️", "WARNING")
+    cleanText = Replace(cleanText, "📤", "")
+    cleanText = Replace(cleanText, "🔄", "")
+    cleanText = Replace(cleanText, "✅", "")
+    cleanText = Replace(cleanText, "📦", "")
+    cleanText = Replace(cleanText, "🗄️", "")
+    cleanText = Replace(cleanText, "🔐", "")
+    cleanText = Replace(cleanText, "📄", "")
+    cleanText = Replace(cleanText, "📁", "")
+    cleanText = Replace(cleanText, "📋", "")
+    cleanText = Replace(cleanText, "🗺️", "")
+    cleanText = Replace(cleanText, "🔔", "")
+    cleanText = Replace(cleanText, "📊", "")
+    cleanText = Replace(cleanText, "⚙️", "")
+    cleanText = Replace(cleanText, "📂", "")
+    cleanText = Replace(cleanText, "→", "->")
+    cleanText = Replace(cleanText, "•", "-")
+    
+    ' Limpiar caracteres de control y otros símbolos problemáticos
+    cleanText = Replace(cleanText, ChrW(8226), "-") ' bullet point
+    cleanText = Replace(cleanText, ChrW(8594), "->") ' right arrow
+    cleanText = Replace(cleanText, ChrW(8250), ">") ' single right-pointing angle quotation mark
+    
+    CleanTerminalText = cleanText
+End Function
+
+' ============================================================================
 
 Sub LogMessage(message)
-    ' Reemplazar caracteres especiales para evitar problemas de codificación en consola
-    Dim cleanMessage
-    cleanMessage = Replace(message, "ó", "o")
-    cleanMessage = Replace(cleanMessage, "ñ", "n")
-    cleanMessage = Replace(cleanMessage, "á", "a")
-    cleanMessage = Replace(cleanMessage, "é", "e")
-    cleanMessage = Replace(cleanMessage, "í", "i")
-    cleanMessage = Replace(cleanMessage, "ú", "u")
-    cleanMessage = Replace(cleanMessage, "Ó", "O")
-    cleanMessage = Replace(cleanMessage, "Ñ", "N")
-    cleanMessage = Replace(cleanMessage, "Á", "A")
-    cleanMessage = Replace(cleanMessage, "É", "E")
-    cleanMessage = Replace(cleanMessage, "Í", "I")
-    cleanMessage = Replace(cleanMessage, "Ú", "U")
-    
     ' Escribir a consola solo si no está en modo quiet
     If Not gQuiet Then
-        WScript.Echo "[" & Now & "] " & cleanMessage
+        WScript.Echo "[" & Now & "] " & CleanTerminalText(message)
     End If
     
     ' Escribir siempre al archivo de log (mensaje original con acentos)
@@ -959,17 +1193,17 @@ End Sub
 
 ' Función para logs sin normalizar tildes (para archivos y copia-pega)
 Sub LogMessageRaw(message)
-    WScript.Echo message
+    WScript.Echo CleanTerminalText(message)
 End Sub
 
 Sub LogVerbose(message)
     If gVerbose And Not gQuiet Then
-        WScript.Echo "[VERBOSE] " & message
+        WScript.Echo "[VERBOSE] " & CleanTerminalText(message)
     End If
 End Sub
 
 Sub LogError(message)
-    WScript.Echo "[ERROR] " & message
+    WScript.Echo "[ERROR] " & CleanTerminalText(message)
     ' Escribir siempre al archivo de log
     AppendLogToFile "[ERROR] " & message
 End Sub
@@ -1923,7 +2157,7 @@ End Function
 
 ' ====== Deteccion de charset por BOM, sin indexar si no hay bytes ======
 Function DetectCharset(path)
-    DetectCharset = "windows-1252" ' Default fallback
+    DetectCharset = "utf-8" ' Default fallback ahora UTF-8
     Dim stm
     
     Set stm = CreateObject("ADODB.Stream")
@@ -2005,7 +2239,7 @@ Sub TranscodeTextFile(srcPath, dstPath, dstCharset)
     txt = inS.ReadText(-1)
     If Err.Number <> 0 Then
         ' Si falla (p.ej. por charset incorrecto), reintentar asumiendo windows-1252
-        WScript.Echo "[ERROR] Error cargando archivo con charset " & srcCs & ": " & Err.Description
+        WScript.Echo CleanTerminalText("[ERROR] Error cargando archivo con charset " & srcCs & ": " & Err.Description)
         Err.Clear
         inS.Close
         inS.Type = 2
@@ -2014,7 +2248,7 @@ Sub TranscodeTextFile(srcPath, dstPath, dstCharset)
         inS.LoadFromFile srcPath
         txt = inS.ReadText(-1)
         If Err.Number <> 0 Then
-            WScript.Echo "[ERROR] Error cargando archivo con windows-1252: " & Err.Description
+            WScript.Echo CleanTerminalText("[ERROR] Error cargando archivo con windows-1252: " & Err.Description)
             Exit Sub
         End If
     End If
@@ -2035,7 +2269,7 @@ Sub TranscodeTextFile(srcPath, dstPath, dstCharset)
     outS.Close
     
     If Err.Number <> 0 Then
-        WScript.Echo "[ERROR] Error guardando archivo: " & Err.Description
+        WScript.Echo CleanTerminalText("[ERROR] Error guardando archivo: " & Err.Description)
         Err.Clear
     End If
 End Sub
@@ -2876,7 +3110,41 @@ Class JsonWriter
     End Sub
 End Class
 
+' ============================================================================
+' SECCIÓN: VERIFICACIÓN DE ARQUITECTURA
+' ============================================================================
+
+Function Is64BitProcess()
+    Is64BitProcess = (InStr(1, LCase(CreateObject("WScript.Shell").ExpandEnvironmentStrings("%PROCESSOR_ARCHITECTURE%")), "64") > 0)
+End Function
+
+Function OfficeBitness()
+    On Error Resume Next
+    Dim sh: Set sh = CreateObject("WScript.Shell")
+    Dim q, val
+    q = "HKLM\SOFTWARE\Microsoft\Office\16.0\Outlook\Bitness"
+    val = sh.RegRead(q)
+    If Err.Number <> 0 Then
+        Err.Clear
+        q = "HKLM\SOFTWARE\WOW6432Node\Microsoft\Office\16.0\Outlook\Bitness"
+        val = sh.RegRead(q)
+    End If
+    OfficeBitness = LCase(val) ' "x86" o "x64"
+End Function
+
+Sub AssertArchitecture()
+    Dim proc64: proc64 = Is64BitProcess()
+    Dim off: off = OfficeBitness()
+    If (proc64 And off = "x86") Or ((Not proc64) And off = "x64") Then
+        WScript.Echo CleanTerminalText("ADVERTENCIA: Mismatch de arquitectura (cscript vs Office: " & off & ").")
+        WScript.Quit 3
+    End If
+End Sub
+
 Sub Main()
+    ' Verificar arquitectura al inicio
+    AssertArchitecture
+    
     ' Inicializar objetos
     Set objFSO = CreateObject("Scripting.FileSystemObject")
     Set objArgs = WScript.Arguments
@@ -2984,13 +3252,13 @@ Sub Main()
             End If
             
             If Not gDryRun Then
-                If gVerbose Then WScript.Echo "Extrayendo modulos VBA desde Access..."
+                If gVerbose Then WScript.Echo CleanTerminalText("Extrayendo modulos VBA desde Access...")
                 If Not ExtractModulesToFiles(gDbPath) Then
-                    WScript.Echo "Error: No se pudo completar la extraccion de modulos"
+                    WScript.Echo CleanTerminalText("Error: No se pudo completar la extraccion de modulos")
                     WScript.Quit 1
                 End If
             Else
-                WScript.Echo "[DRY-RUN] Se extraerian modulos VBA desde: " & gDbPath
+                WScript.Echo CleanTerminalText("[DRY-RUN] Se extraerian modulos VBA desde: " & gDbPath)
             End If
             
 
@@ -3002,16 +3270,16 @@ Sub Main()
             
             ' Validar que el archivo existe
             If Not objFSO.FileExists(gDbPath) Then
-                WScript.Echo "Error: El archivo de base de datos no existe: " & gDbPath
+                WScript.Echo CleanTerminalText("Error: El archivo de base de datos no existe: " & gDbPath)
                 WScript.Quit 1
             End If
             
-            If gVerbose Then WScript.Echo "Reconstruyendo modulos VBA..."
+            If gVerbose Then WScript.Echo CleanTerminalText("Reconstruyendo modulos VBA...")
             
             ' Abrir Access para RebuildProject
             Set objAccess = OpenAccess(gDbPath, gPassword)
             If objAccess Is Nothing Then
-                WScript.Echo "Error: No se pudo abrir Access"
+                WScript.Echo CleanTerminalText("Error: No se pudo abrir Access")
                 WScript.Quit 1
             End If
             
@@ -3030,7 +3298,7 @@ Sub Main()
             
             ' Validar que el archivo existe
             If Not objFSO.FileExists(gDbPath) Then
-                WScript.Echo "Error: El archivo de base de datos no existe: " & gDbPath
+                WScript.Echo CleanTerminalText("Error: El archivo de base de datos no existe: " & gDbPath)
                 WScript.Quit 1
             End If
             
@@ -3050,20 +3318,20 @@ Sub Main()
                 Next
                 
                 If Not gDryRun Then
-                    If gVerbose Then WScript.Echo "Ejecutando update de módulos específicos..."
+                    If gVerbose Then WScript.Echo CleanTerminalText("Ejecutando update de módulos específicos...")
                     Dim res
                     res = UpdateModules(gDbPath, modulesArg)
                     If Not res Then
-                        WScript.Echo "Error: No se pudo completar el update de módulos"
+                        WScript.Echo CleanTerminalText("Error: No se pudo completar el update de módulos")
                         WScript.Quit 1
                     End If
                     LogMessage "Update completado exitosamente"
                 Else
-                    WScript.Echo "[DRY-RUN] Se ejecutaría update de módulos: " & modulesArg & " en " & gDbPath
+                    WScript.Echo CleanTerminalText("[DRY-RUN] Se ejecutaría update de módulos: " & modulesArg & " en " & gDbPath)
                 End If
             Else
-                WScript.Echo "Error: El comando update requiere especificar módulos"
-                WScript.Echo "Uso: cscript cli.vbs update <lista_modulos>"
+                WScript.Echo CleanTerminalText("Error: El comando update requiere especificar módulos")
+                WScript.Echo CleanTerminalText("Uso: cscript cli.vbs update <lista_modulos>")
                 WScript.Quit 1
             End If
             
@@ -3112,7 +3380,7 @@ Sub Main()
             If fmtOpt <> "json" And fmtOpt <> "md" Then fmtOpt = "json"
 
             If Not ExportSchema(gDbPath, tableOpt, outOpt, fmtOpt) Then
-                WScript.Echo "Error: no se pudo exportar el esquema"
+                WScript.Echo CleanTerminalText("Error: no se pudo exportar el esquema")
                 WScript.Quit 1
             End If
             WScript.Quit 0
@@ -3129,7 +3397,7 @@ Sub Main()
                     Case Else: If dbArg2 = "" Then dbArg2 = cleanArgs(k2)
                 End Select
             Next
-            If formArg = "" Then WScript.Echo "Error: --form es obligatorio": WScript.Quit 1
+            If formArg = "" Then WScript.Echo CleanTerminalText("Error: --form es obligatorio"): WScript.Quit 1
             If dbArg2 = "" Then
                 dbArg2 = objConfig("DATABASE_DefaultPath")
             End If
@@ -3154,7 +3422,7 @@ Sub Main()
                         If jsonArg = "" Then jsonArg = cleanArgs(k3) Else If dbArg3 = "" Then dbArg3 = cleanArgs(k3)
                 End Select
             Next
-            If jsonArg = "" Then WScript.Echo "Error: falta json_path": WScript.Quit 1
+            If jsonArg = "" Then WScript.Echo CleanTerminalText("Error: falta json_path"): WScript.Quit 1
             jsonArg = ResolvePath(jsonArg)
             If dbArg3 = "" Then
                 dbArg3 = objConfig("DATABASE_DefaultPath")
@@ -3205,13 +3473,27 @@ Sub Main()
             Set config6 = LoadConfig(gConfigPath)
             Call EnsureConfigLoaded()
             dbArg6 = CfgGet(config6,"DATABASE_DefaultPath","DATABASE.DefaultPath","")
-            If cleanArgCount < 2 Then WScript.Echo "uso: ui-touch <formName|form.json>": WScript.Quit 1
+            If cleanArgCount < 2 Then WScript.Echo CleanTerminalText("uso: ui-touch <formName|form.json>"): WScript.Quit 1
             item = cleanArgs(1)
             Dim arr(0): arr(0) = item
             If Not UI_UpdateSome(ResolvePath(dbArg6), arr, config6) Then WScript.Quit 1 Else WScript.Quit 0
             
         Case "test"
             RunTests
+            
+        Case "lint"
+            gDbPath = ResolvePath(objConfig("DATABASE_DefaultPath"))
+            Dim listArg: listArg = ""
+            If cleanArgCount >= 2 Then listArg = JoinTailArgs(cleanArgs)
+            Dim ok: ok = LintModules(gDbPath, ResolvePath(objConfig("MODULES_SrcPath")), listArg)
+            If Not ok Then WScript.Quit 2
+            WScript.Echo CleanTerminalText("✓ lint OK")
+            WScript.Quit 0
+            
+        Case "rebuild-tx"
+            gDbPath = ResolvePath(objConfig("DATABASE_DefaultPath"))
+            RebuildProject_Transactional
+            WScript.Quit 0
             
         Case "--help", "help", "/?"
             ShowHelp
@@ -3386,8 +3668,8 @@ Function UpdateModules(dbPath, modulesArg)
     End If
     On Error GoTo 0
     
-    ' Cierre IGUAL que rebuild
-    CloseAccess app
+    ' Cierre ROBUSTO que evita prompts
+    CloseAccess_Robust app
     
     LogMessage "update: proceso completado exitosamente"
     UpdateModules = True
@@ -3402,30 +3684,30 @@ Sub ListObjects(dbPath)
         Exit Sub
     End If
     
-    WScript.Echo "=== TABLAS ==="
+    WScript.Echo CleanTerminalText("=== TABLAS ===")
     Dim tbl
     For Each tbl In objAccess.CurrentDb.TableDefs
         If Left(tbl.Name, 4) <> "MSys" Then
-            WScript.Echo "  " & tbl.Name
+            WScript.Echo CleanTerminalText("  " & tbl.Name)
         End If
     Next
     
-    WScript.Echo "=== FORMULARIOS ==="
+    WScript.Echo CleanTerminalText("=== FORMULARIOS ===")
     Dim frm
     For Each frm In objAccess.CurrentProject.AllForms
-        WScript.Echo "  " & frm.Name
+        WScript.Echo CleanTerminalText("  " & frm.Name)
     Next
     
-    WScript.Echo "=== CONSULTAS ==="
+    WScript.Echo CleanTerminalText("=== CONSULTAS ===")
     Dim qry
     For Each qry In objAccess.CurrentDb.QueryDefs
-        WScript.Echo "  " & qry.Name
+        WScript.Echo CleanTerminalText("  " & qry.Name)
     Next
     
-    WScript.Echo "=== MODULOS ==="
+    WScript.Echo CleanTerminalText("=== MODULOS ===")
     Dim mdl
     For Each mdl In objAccess.CurrentProject.AllModules
-        WScript.Echo "  " & mdl.Name
+        WScript.Echo CleanTerminalText("  " & mdl.Name)
     Next
     
     CloseAccess_Robust objAccess
@@ -3570,7 +3852,7 @@ Function TestAccessAutomation()
     End If
     
     ' Cerrar y limpiar
-    CloseAccess objAccess
+    CloseAccess_Robust objAccess
     
     On Error GoTo 0
     TestAccessAutomation = True
@@ -3614,7 +3896,7 @@ Function TestVBEAccess()
     End If
     
     ' Cerrar y limpiar
-    CloseAccess objAccess
+    CloseAccess_Robust objAccess
     
     On Error GoTo 0
     TestVBEAccess = True
@@ -3986,7 +4268,16 @@ Function RebuildLike_ImportOne(objAccess, moduleName)
     
     ' 4) Limpiar archivo antes de importar usando la misma función que rebuild
     Dim cleanedContent
-    cleanedContent = CleanVBAFile(filePath, fileExtension)
+    If LCase(gConfig("MODULES_ImportRaw")) = "true" Then
+        ' Importación directa sin CleanVBAFile, solo garantizando Option Explicit
+        cleanedContent = ReadFileWithCharsetDetection(filePath)
+        If InStr(cleanedContent, "Option Explicit") = 0 Then
+            cleanedContent = "Option Explicit" & vbCrLf & cleanedContent
+        End If
+    Else
+        ' Usar CleanVBAFile para retrocompatibilidad
+        cleanedContent = CleanVBAFile(filePath, fileExtension)
+    End If
     
     ' 5) Importar EXACTAMENTE como lo hace rebuild
     Call ImportModuleWithAnsiEncoding(filePath, moduleName, fileExtension, objAccess.VBE.ActiveVBProject, cleanedContent)
@@ -4086,7 +4377,7 @@ Sub RebuildProject()
     WScript.Echo "Paso 2: Cerrando base de datos..."
     
     ' Cerrar usando la vía canónica
-    CloseAccess objAccess
+    CloseAccess_Robust objAccess
     WScript.Echo "✓ Base de datos cerrada y guardada"
     
     ' Paso 3: Volver a abrir la base de datos
@@ -4199,7 +4490,7 @@ Sub RebuildProject()
         CloseAccess_Robust objAccess
         WScript.Quit 2
     End If
-    End If
+    
     On Error GoTo 0
     
     LogMessage "=== RECONSTRUCCION COMPLETADA EXITOSAMENTE ==="
@@ -4207,10 +4498,97 @@ Sub RebuildProject()
     LogMessage "Todos los modulos han sido reimportados desde /src"
     
     ' Cerrar usando la vía canónica
-    CloseAccess objAccess
+    CloseAccess_Robust objAccess
     
     LogVerbose "rebuild: cierre canonico completado"
     On Error GoTo 0
+End Sub
+
+Sub RebuildProject_Transactional()
+    Dim fso: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim bak, tmp: bak = gDbPath & ".bak.accdb": tmp = gDbPath & ".tmp.accdb"
+    If fso.FileExists(tmp) Then fso.DeleteFile tmp, True
+    fso.CopyFile gDbPath, tmp, True
+
+    ' Abrir tmp y hacer rebuild completo dentro
+    Dim app: Set app = OpenAccess(tmp, GetDatabasePassword(tmp))
+    If app Is Nothing Then Fail "No se pudo abrir tmp"
+
+    AntiUI app
+    If Not CheckVBProjectAccess(app) Then CloseAccess_Robust app: Fail "VBE no disponible en tmp"
+
+    ' Paso 1: Eliminar todos los módulos existentes
+    WScript.Echo "Paso 1: Eliminando todos los modulos VBA existentes en tmp..."
+    
+    Dim vbProject, vbComponent
+    Set vbProject = app.VBE.ActiveVBProject
+    
+    Dim componentCount, i
+    componentCount = vbProject.VBComponents.Count
+    
+    ' Iterar hacia atrás para evitar problemas al eliminar elementos
+    For i = componentCount To 1 Step -1
+        Set vbComponent = vbProject.VBComponents(i)
+        
+        ' Solo eliminar módulos estándar y de clase (no formularios ni informes)
+        If vbComponent.Type = 1 Or vbComponent.Type = 2 Then ' vbext_ct_StdModule = 1, vbext_ct_ClassModule = 2
+            vbProject.VBComponents.Remove vbComponent
+        End If
+    Next
+    
+    ' Paso 2: Importar todos los módulos
+    WScript.Echo "Paso 2: Importando todos los modulos desde /src en tmp..."
+    
+    Dim objFolder, objFile
+    Dim strModuleName
+    
+    If Not objFSO.FolderExists(g_ModulesSrcPath) Then
+        CloseAccess_Robust app
+        Fail "Directorio de origen no existe: " & g_ModulesSrcPath
+    End If
+    
+    Set objFolder = objFSO.GetFolder(g_ModulesSrcPath)
+    
+    For Each objFile In objFolder.Files
+        If LCase(objFSO.GetExtensionName(objFile.Name)) = "bas" Or LCase(objFSO.GetExtensionName(objFile.Name)) = "cls" Then
+            strModuleName = objFSO.GetBaseName(objFile.Name)
+            
+            ' Usar la función unificada de importación
+            Dim importResult
+            importResult = RebuildLike_ImportOne(app, strModuleName)
+            
+            If Not importResult Then
+                CloseAccess_Robust app
+                Fail "Error al importar modulo " & strModuleName
+            End If
+        End If
+    Next
+    
+    CloseAccess_Robust app
+
+    ' Reabrir tmp y COMPILAR
+    WScript.Echo "Paso 3: Compilando en tmp..."
+    Set app = OpenAccess(tmp, GetDatabasePassword(tmp))
+    AntiUI app
+    If Not CheckMissingReferences(app) Then CloseAccess_Robust app: Fail "Referencias rotas en tmp"
+    If Not Maybe_DoCmd_CompileAndSaveAllModules(app, "rebuild-tx") Then CloseAccess_Robust app: Fail "Compilación fallida en tmp"
+    CloseAccess_Robust app
+
+    ' Commit atómico en disco
+    WScript.Echo "Paso 4: Realizando swap atomico en disco..."
+    If fso.FileExists(bak) Then fso.DeleteFile bak, True
+    fso.MoveFile gDbPath, bak
+    fso.MoveFile tmp, gDbPath
+    On Error Resume Next: fso.DeleteFile bak, True: On Error GoTo 0
+
+    WScript.Echo "✓ rebuild-tx OK (swap en disco completado)"
+    Exit Sub
+Fail:
+    On Error Resume Next
+    If Not app Is Nothing Then CloseAccess_Robust app
+    If fso.FileExists(tmp) Then fso.DeleteFile tmp, True
+    WScript.Echo "❌ rebuild-tx abortado: " & Err.Description
+    Err.Clear
 End Sub
 
 ' Ejecutar función principal
@@ -4284,7 +4662,7 @@ Function ExportFormToJson(dbPath, formName, outJson)
 
     ' Cerrar sin guardar
     app.DoCmd.Close acForm, formName, acSaveNo
-    CloseAccess app
+    CloseAccess_Robust app
     ExportFormToJson = True
 End Function
 
@@ -4957,7 +5335,7 @@ Function UI_UpdateSome(dbPath, items, config)
     Next
     
     ' Cerrar Access
-    CloseAccess app
+    CloseAccess_Robust app
     
     UI_UpdateSome = allSuccess
     On Error GoTo 0
@@ -5583,7 +5961,7 @@ Function ImportFormFromJson_Finalize()
         WScript.Quit 2
     End If
     On Error GoTo 0
-    CloseAccess app
+    CloseAccess_Robust app
 
     ' Limpiar referencias
     Set ImportFormFromJson_app = Nothing
@@ -5662,7 +6040,7 @@ Function UI_RebuildAll_Complete(dbPath, files, config)
         WScript.Quit 2
     End If
     On Error GoTo 0
-    CloseAccess app
+    CloseAccess_Robust app
     UI_RebuildAll_Complete = True
 End Function
 
