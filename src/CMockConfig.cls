@@ -8,7 +8,7 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
 Option Compare Database
-
+'hola2222¡
 Implements IConfig
 
 Private m_Settings As Object
