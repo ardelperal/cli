@@ -11,7 +11,7 @@ Option Compare Database
 Option Explicit
 
 Implements IAppManager
-
+asdasdasd
 ' =====================================================
 ' CLASE: CAppManager
 ' PROPOSITO: Implementaci?n de la gesti?n centralizada de la aplicaci?n
