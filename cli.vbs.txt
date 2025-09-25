@@ -158,49 +158,184 @@ Sub SafeSwapForm(app, finalName, tmpName)
     Dim bakName: bakName = finalName & "__bak"
     
     ' 1) Si existe final, renombrarlo a __bak
-    app.DoCmd.Rename bakName, acForm, finalName
-    If Err.Number <> 0 Then
-        Err.Clear ' si no existia finalName, seguira con tmp->final
+    If Not Maybe_DoCmd_Rename(app, bakName, acForm, finalName, "SwapFormNames step 1") Then
+        ' Si no existia finalName, seguira con tmp->final
     End If
     
     ' 2) Renombrar tmp -> final
-    app.DoCmd.Rename finalName, acForm, tmpName
-    If Err.Number <> 0 Then
-        Dim swapErr: swapErr = Err.Description
-        Err.Clear
+    If Not Maybe_DoCmd_Rename(app, finalName, acForm, tmpName, "SwapFormNames step 2") Then
         ' Rollback: intentar volver bak -> final
-        app.DoCmd.Rename finalName, acForm, bakName
-        If Err.Number <> 0 Then
-            LogError "ROLLBACK FALLIDO: bak->final. Revision manual. " & Err.Description
-            Err.Clear
+        If Not Maybe_DoCmd_Rename(app, finalName, acForm, bakName, "SwapFormNames rollback") Then
+            LogError "ROLLBACK FALLIDO: bak->final. Revision manual."
         End If
-        LogError "Swap atomico fallido tmp->final: " & swapErr
+        LogError "Swap atomico fallido tmp->final"
         Exit Sub
     End If
     
     ' 3) Commit: borrar __bak si existe
-    app.DoCmd.DeleteObject acForm, bakName
-    Err.Clear
+    Maybe_DoCmd_Delete app, acForm, bakName, "SwapFormNames cleanup"
 End Sub
 
 ' Subrutina centralizada para desactivar todas las alertas y diálogos de Access
+' Versión canónica y reforzada (AntiUI_Robust)
 Sub AntiUI(app)
     On Error Resume Next
+    ' Baseline
     app.DisplayAlerts = False
     app.Echo = False
     app.DoCmd.SetWarnings False
-    ' Forzar seguridad de macros deshabilitada
-    app.AutomationSecurity = 3 ' msoAutomationSecurityForceDisable (3 = ForceDisable, 1 = Low, 2 = ByUI)
-    ' Cerrar ventanas potenciales (mejor esfuerzo, sin UI)
+    app.AutomationSecurity = 3 ' ForceDisable
     app.Visible = False
     app.UserControl = False
-    
-    ' Opciones de confirmacion a nivel de aplicacion (evita prompts)
+
+    ' Confirm prompts off
     app.Application.SetOption "Confirm Action Queries", False
     app.Application.SetOption "Confirm Document Deletions", False
     app.Application.SetOption "Confirm Record Changes", False
+
+    ' (Opcional) desactivar Name AutoCorrect (evita recalcular objetos y prompts)
+    app.Application.SetOption "Track Name AutoCorrect Info", False
+    app.Application.SetOption "Perform Name AutoCorrect", False
+    app.Application.SetOption "Auto Compact", False
+
     Err.Clear
 End Sub
+
+' ============================================================================
+' WRAPPERS SEGUROS PARA DoCmd (reintento + timeout + AntiUI)
+' ============================================================================
+
+Function DoCmdSafe_Rename(app, newName, objType, oldName, ctx)
+    Dim i, maxRetry: maxRetry = CInt(GetIniValue("UI","RetryCount","3"))
+    For i = 1 To maxRetry
+        On Error Resume Next
+        AntiUI app
+        app.DoCmd.Rename newName, objType, oldName
+        If Err.Number = 0 Then DoCmdSafe_Rename = True: Exit Function
+        LogError "Rename fail (" & ctx & "): " & Err.Number & " - " & Err.Description & " [attempt " & i & "]"
+        Err.Clear
+        WScript.Sleep CInt(GetIniValue("UI","RetrySleepMs","150"))
+    Next
+    DoCmdSafe_Rename = False
+End Function
+
+Function DoCmdSafe_Delete(app, objType, name, ctx)
+    Dim i, maxRetry: maxRetry = CInt(GetIniValue("UI","RetryCount","3"))
+    For i = 1 To maxRetry
+        On Error Resume Next
+        AntiUI app
+        app.DoCmd.DeleteObject objType, name
+        If Err.Number = 0 Then DoCmdSafe_Delete = True: Exit Function
+        LogError "Delete fail (" & ctx & "): " & Err.Number & " - " & Err.Description & " [attempt " & i & "]"
+        Err.Clear
+        WScript.Sleep CInt(GetIniValue("UI","RetrySleepMs","150"))
+    Next
+    DoCmdSafe_Delete = False
+End Function
+
+Function DoCmdSafe_OpenFormDesignHidden(app, formName, ctx)
+    Dim i, maxRetry: maxRetry = CInt(GetIniValue("UI","RetryCount","3"))
+    For i = 1 To maxRetry
+        On Error Resume Next
+        AntiUI app
+        app.DoCmd.OpenForm formName, acDesign, , , , acHidden
+        If Err.Number = 0 Then
+            Dim activeName
+            If WaitActiveFormName(app, activeName) And LCase(activeName) = LCase(formName) Then
+                DoCmdSafe_OpenFormDesignHidden = True: Exit Function
+            End If
+        End If
+        LogError "OpenForm(design,hidden) fail (" & ctx & "): " & Err.Number & " - " & Err.Description & " [attempt " & i & "]"
+        Err.Clear
+        WScript.Sleep CInt(GetIniValue("UI","RetrySleepMs","150"))
+    Next
+    DoCmdSafe_OpenFormDesignHidden = False
+End Function
+
+' ============================================================================
+' FUNCIONES MAYBE_DOCMD_* PARA DRYRUN
+' ============================================================================
+
+Function Maybe_DoCmd_Rename(app, newName, objType, oldName, ctx)
+    If gDryRun Then
+        LogInfo "DryRun: Rename " & TypeName(objType) & " '" & oldName & "' to '" & newName & "' (" & ctx & ")"
+        Maybe_DoCmd_Rename = True
+    Else
+        Maybe_DoCmd_Rename = DoCmdSafe_Rename(app, newName, objType, oldName, ctx)
+    End If
+End Function
+
+Function Maybe_DoCmd_Delete(app, objType, name, ctx)
+    If gDryRun Then
+        LogInfo "DryRun: Delete " & TypeName(objType) & " '" & name & "' (" & ctx & ")"
+        Maybe_DoCmd_Delete = True
+    Else
+        Maybe_DoCmd_Delete = DoCmdSafe_Delete(app, objType, name, ctx)
+    End If
+End Function
+
+Function Maybe_DoCmd_OpenFormDesignHidden(app, formName, ctx)
+    If gDryRun Then
+        LogInfo "DryRun: OpenForm '" & formName & "' in design mode hidden (" & ctx & ")"
+        Maybe_DoCmd_OpenFormDesignHidden = True
+    Else
+        Maybe_DoCmd_OpenFormDesignHidden = DoCmdSafe_OpenFormDesignHidden(app, formName, ctx)
+    End If
+End Function
+
+Function Maybe_DoCmd_Close(app, objType, objName, saveOption, ctx)
+    If gDryRun Then
+        LogInfo "DryRun: Close " & TypeName(objType) & " '" & objName & "' with save option " & saveOption & " (" & ctx & ")"
+        Maybe_DoCmd_Close = True
+    Else
+        On Error Resume Next
+        AntiUI app
+        app.DoCmd.Close objType, objName, saveOption
+        If Err.Number = 0 Then
+            Maybe_DoCmd_Close = True
+        Else
+            LogError "Close fail (" & ctx & "): " & Err.Number & " - " & Err.Description
+            Maybe_DoCmd_Close = False
+        End If
+        Err.Clear
+    End If
+End Function
+
+Function Maybe_DoCmd_Save(app, objType, objName, ctx)
+    If gDryRun Then
+        LogInfo "DryRun: Save " & TypeName(objType) & " '" & objName & "' (" & ctx & ")"
+        Maybe_DoCmd_Save = True
+    Else
+        On Error Resume Next
+        AntiUI app
+        app.DoCmd.Save objType, objName
+        If Err.Number = 0 Then
+            Maybe_DoCmd_Save = True
+        Else
+            LogError "Save fail (" & ctx & "): " & Err.Number & " - " & Err.Description
+            Maybe_DoCmd_Save = False
+        End If
+        Err.Clear
+    End If
+End Function
+
+Function Maybe_DoCmd_CompileAndSaveAllModules(app, ctx)
+    If gDryRun Then
+        LogInfo "DryRun: Compile and save all modules (" & ctx & ")"
+        Maybe_DoCmd_CompileAndSaveAllModules = True
+    Else
+        On Error Resume Next
+        AntiUI app
+        app.RunCommand acCmdCompileAndSaveAllModules
+        If Err.Number = 0 Then
+            Maybe_DoCmd_CompileAndSaveAllModules = True
+        Else
+            LogError "CompileAndSaveAllModules fail (" & ctx & "): " & Err.Number & " - " & Err.Description
+            Maybe_DoCmd_CompileAndSaveAllModules = False
+        End If
+        Err.Clear
+    End If
+End Function
 
 ' ============================================================================
 ' SECCIÓN 2: VARIABLES GLOBALES
@@ -542,6 +677,27 @@ Function GetAccessPIDs()
     On Error GoTo 0
 End Function
 
+' Función para verificar referencias rotas antes de compilar
+Function CheckMissingReferences(app)
+    On Error Resume Next
+    
+    LogVerbose "Verificando referencias de VBA..."
+    
+    Dim ref
+    For Each ref In app.References
+        If ref.IsBroken Then
+            LogError "Referencia rota: " & ref.Name & " -> " & ref.FullPath
+            CheckMissingReferences = False
+            Exit Function
+        End If
+    Next
+    
+    LogVerbose "Todas las referencias de VBA estan disponibles"
+    CheckMissingReferences = True
+    
+    On Error GoTo 0
+End Function
+
 ' Función para terminar un PID específico de Access
 Sub TerminateAccessPID(targetPID)
     On Error Resume Next
@@ -594,6 +750,89 @@ Sub CloseExistingAccessProcesses()
         LogVerbose "No hay procesos de Access ejecutandose"
     End If
 End Sub
+
+' Función robusta para cerrar Access con kill de emergencia si es necesario
+Sub CloseAccess_Robust(app)
+    On Error Resume Next
+    
+    Dim pidsBefore: pidsBefore = GetAccessPIDs()
+    
+    ' Cierra cualquier objeto abierto sin guardar (silencioso)
+    AntiUI app
+    app.DoCmd.Close acForm, , acSaveNo
+    app.DoCmd.Close acReport, , acSaveNo
+    Err.Clear
+    
+    ' Cierra la BD y la app
+    AntiUI app
+    app.CloseCurrentDatabase
+    Err.Clear
+    app.Quit
+    Err.Clear
+    
+    ' Espera configurable a que muera el proceso
+    Dim waitMs: waitMs = CInt(GetIniValue("ACCESS","QuitWaitMs","1500"))
+    WScript.Sleep waitMs
+    
+    ' Si sigue vivo, intenta matar por PID (solo los que aparecían antes)
+    Dim pidsAfter, i, j
+    pidsAfter = GetAccessPIDs()
+    For i = 0 To UBound(pidsAfter)
+        For j = 0 To UBound(pidsBefore)
+            If pidsAfter(i) = pidsBefore(j) Then
+                TerminateAccessPID pidsAfter(i)
+            End If
+        Next
+    Next
+    
+    Set app = Nothing
+End Sub
+
+' Función simple para cerrar Access (mantener compatibilidad)
+Sub CloseAccess(app)
+    ' Redirigir a la versión robusta
+    CloseAccess_Robust app
+End Sub
+
+' Función para verificar la capacidad de respuesta de Access
+Function EnsureResponsive(app, context)
+    On Error Resume Next
+    
+    Dim responseTimeoutMs: responseTimeoutMs = CInt(GetIniValue("ACCESS","ResponseTimeoutMs","3000"))
+    Dim startTime: startTime = Timer
+    
+    ' Intenta una operación simple para verificar responsividad
+    Dim testResult: testResult = app.CurrentProject.Name
+    
+    If Err.Number <> 0 Then
+        LogMessage "ADVERTENCIA: Access no responde en contexto '" & context & "' - Error: " & Err.Description
+        Err.Clear
+        
+        ' Intenta AntiUI para recuperar responsividad
+        LogVerbose "Intentando recuperar responsividad con AntiUI..."
+        AntiUI app
+        
+        ' Segundo intento
+        testResult = app.CurrentProject.Name
+        If Err.Number <> 0 Then
+            LogMessage "ERROR: Access sigue sin responder tras AntiUI en contexto '" & context & "'"
+            Err.Clear
+            EnsureResponsive = False
+            Exit Function
+        End If
+    End If
+    
+    Dim elapsedMs: elapsedMs = (Timer - startTime) * 1000
+    If elapsedMs > responseTimeoutMs Then
+        LogMessage "ADVERTENCIA: Access responde lentamente (" & Int(elapsedMs) & "ms) en contexto '" & context & "'"
+        EnsureResponsive = False
+    Else
+        LogVerbose "Access responde correctamente en " & Int(elapsedMs) & "ms para contexto '" & context & "'"
+        EnsureResponsive = True
+    End If
+    
+    On Error GoTo 0
+End Function
 
 ' Función para abrir Access de forma segura
 ' Función canónica para abrir Access (basada en condor_cli.vbs)
@@ -743,6 +982,74 @@ Function FailIfErr(context)
         FailIfErr = True
     Else
         FailIfErr = False
+    End If
+End Function
+
+' ============================================================================
+' FUNCIÓN HANDLEERR PARA MANEJO DE ERRORES ESTRUCTURADO
+' ============================================================================
+
+Function HandleErr(context, severity, shouldExit)
+    ' Manejo centralizado de errores con diferentes niveles de severidad
+    ' context: descripción del contexto donde ocurrió el error
+    ' severity: "warning", "error", "critical"
+    ' shouldExit: True para terminar la ejecución, False para continuar
+    
+    If Err.Number <> 0 Then
+        Dim errorMsg: errorMsg = context & " -> " & Err.Number & " - " & Err.Description
+        
+        Select Case LCase(severity)
+            Case "warning"
+                LogMessage "WARNING: " & errorMsg
+            Case "error"
+                LogError "ERROR: " & errorMsg
+            Case "critical"
+                LogError "CRITICAL: " & errorMsg
+            Case Else
+                LogError "UNKNOWN SEVERITY: " & errorMsg
+        End Select
+        
+        Err.Clear
+        
+        If shouldExit Then
+            If IsObject(objAccess) Then CloseAccess_Robust objAccess
+            WScript.Quit 2
+        End If
+        
+        HandleErr = True
+    Else
+        HandleErr = False
+    End If
+End Function
+
+Function HandleErrWithCleanup(context, severity, shouldExit, cleanupObj)
+    ' Versión extendida de HandleErr que incluye limpieza de objetos
+    ' cleanupObj: objeto Access que debe cerrarse en caso de error crítico
+    
+    If Err.Number <> 0 Then
+        Dim errorMsg: errorMsg = context & " -> " & Err.Number & " - " & Err.Description
+        
+        Select Case LCase(severity)
+            Case "warning"
+                LogMessage "WARNING: " & errorMsg
+            Case "error"
+                LogError "ERROR: " & errorMsg
+            Case "critical"
+                LogError "CRITICAL: " & errorMsg
+            Case Else
+                LogError "UNKNOWN SEVERITY: " & errorMsg
+        End Select
+        
+        Err.Clear
+        
+        If shouldExit Then
+            If IsObject(cleanupObj) Then CloseAccess_Robust cleanupObj
+            WScript.Quit 2
+        End If
+        
+        HandleErrWithCleanup = True
+    Else
+        HandleErrWithCleanup = False
     End If
 End Function
 
@@ -1043,7 +1350,7 @@ Function ExportSchema(dbPath, tableFilter, outDir, fmt)
         SaveToJSON schema, outFile
     End If
 
-    CloseAccess app
+    CloseAccess_Robust app
     ExportSchema = True
 End Function
 
@@ -1941,6 +2248,14 @@ Function ExtractModulesToFiles(dbPath)
         Exit Function
     End If
     
+    ' Verificar acceso VBE obligatorio antes de proceder
+    If Not CheckVBProjectAccess(objAccess) Then
+        LogError "Acceso VBE requerido para ExtractModulesToFiles. Abortando."
+        CloseAccess_Robust objAccess
+        ExtractModulesToFiles = False
+        Exit Function
+    End If
+    
     ' Extraer modulos VBA
     LogMessage "Extrayendo modulos VBA..."
     
@@ -1949,7 +2264,7 @@ Function ExtractModulesToFiles(dbPath)
     If Err.Number <> 0 Or vbProject Is Nothing Then
         Err.Clear
         LogMessage "Error: No se pudo acceder al proyecto VBA"
-        CloseAccess objAccess
+        CloseAccess_Robust objAccess
         Exit Function
     End If
     
@@ -1957,7 +2272,7 @@ Function ExtractModulesToFiles(dbPath)
     If Err.Number <> 0 Or vbComponents Is Nothing Then
         Err.Clear
         LogMessage "Error: No se pudo acceder a los componentes VBA"
-        CloseAccess objAccess
+        CloseAccess_Robust objAccess
         Exit Function
     End If
     
@@ -2052,7 +2367,7 @@ ExtractReports:
     End If
     
     ' Cerrar Access
-    CloseAccess objAccess
+    CloseAccess_Robust objAccess
     
     If Err.Number <> 0 Then
         LogMessage "Error durante extraccion: " & Err.Description
@@ -2704,7 +3019,7 @@ Sub Main()
             Call RebuildProject()
             
             ' Cerrar Access
-            Call CloseAccess(objAccess)
+            Call CloseAccess_Robust(objAccess)
             WScript.Quit 0
             
         Case "update"
@@ -3016,7 +3331,7 @@ Function UpdateModules(dbPath, modulesArg)
     ' Validacion fail-fast para VBE antes de continuar
     If Not CheckVBProjectAccess(app) Then
         LogError "update: VBE no disponible - operacion abortada"
-        CloseAccess app
+        CloseAccess_Robust app
         UpdateModules = False
         Exit Function
     End If
@@ -3030,7 +3345,7 @@ Function UpdateModules(dbPath, modulesArg)
     
     If IsEmpty(list) Or UBound(list) < 0 Then
         LogMessage "update: sin módulos para actualizar"
-        CloseAccess app
+        CloseAccess_Robust app
         UpdateModules = True
         Exit Function
     End If
@@ -3056,8 +3371,19 @@ Function UpdateModules(dbPath, modulesArg)
     
     ' Compilar/guardar IGUAL que rebuild
     On Error Resume Next
-    app.RunCommand acCmdCompileAndSaveAllModules
-    FailIfErr "RunCommand compile en UpdateModules"
+    
+    ' Verificar referencias antes de compilar
+    If Not CheckMissingReferences(app) Then
+        LogError "Abortando compilacion por referencias rotas."
+        CloseAccess_Robust app
+        WScript.Quit 2
+    End If
+    
+    If Not Maybe_DoCmd_CompileAndSaveAllModules(app, "UpdateModules") Then
+        LogError "Fallo al compilar y guardar modulos en UpdateModules"
+        CloseAccess_Robust app
+        WScript.Quit 2
+    End If
     On Error GoTo 0
     
     ' Cierre IGUAL que rebuild
@@ -3102,7 +3428,7 @@ Sub ListObjects(dbPath)
         WScript.Echo "  " & mdl.Name
     Next
     
-    CloseAccess objAccess
+    CloseAccess_Robust objAccess
 End Sub
 
 
@@ -3282,7 +3608,7 @@ Function TestVBEAccess()
     
     ' Probar acceso VBE usando CheckVBProjectAccess
     If Not CheckVBProjectAccess(objAccess) Then
-        CloseAccess objAccess
+        CloseAccess_Robust objAccess
         TestVBEAccess = False
         Exit Function
     End If
@@ -3723,6 +4049,13 @@ Sub RebuildProject()
     
     On Error Resume Next
     
+    ' Verificar acceso VBE obligatorio antes de proceder
+    If Not CheckVBProjectAccess(objAccess) Then
+        LogError "Acceso VBE requerido para RebuildProject. Abortando."
+        CloseAccess_Robust objAccess
+        WScript.Quit 1
+    End If
+    
     ' Paso 1: Eliminar todos los módulos existentes
     WScript.Echo "Paso 1: Eliminando todos los modulos VBA existentes..."
     
@@ -3853,10 +4186,19 @@ Sub RebuildProject()
     
     ' Compilar y guardar todo al final
     On Error Resume Next
-    objAccess.RunCommand acCmdCompileAndSaveAllModules  ' acCmdCompileAndSaveAllModules
-    If Err.Number <> 0 Then
-        LogMessage "rebuild: aviso al compilar: " & Err.Description
-        Err.Clear
+    
+    ' Verificar referencias antes de compilar
+    If Not CheckMissingReferences(objAccess) Then
+        LogError "Abortando compilacion por referencias rotas."
+        CloseAccess_Robust objAccess
+        WScript.Quit 2
+    End If
+    
+    If Not Maybe_DoCmd_CompileAndSaveAllModules(objAccess, "RebuildProject") Then
+        LogError "Fallo al compilar y guardar modulos en RebuildProject"
+        CloseAccess_Robust objAccess
+        WScript.Quit 2
+    End If
     End If
     On Error GoTo 0
     
@@ -3887,13 +4229,11 @@ Function ExportFormToJson(dbPath, formName, outJson)
     Err.Clear
     
     ' Abrir en diseño y oculto
-    app.DoCmd.OpenForm formName, acDesign, , , , acHidden ' acDesign=1, acHidden=1
-    If FailIfErr("OpenForm " & formName & " en ExportFormToJson") Then
-        CloseAccess app
+    If Not DoCmdSafe_OpenFormDesignHidden(app, formName, "ExportFormToJson") Then
+        LogError "No se pudo abrir el formulario " & formName & " en modo diseno oculto"
+        CloseAccess_Robust app
         Exit Function
     End If
-    ' Reforzar anti-UI después de OpenForm
-    AntiUI app
 
     Dim frm: Set frm = app.Forms(formName)
     Dim root: Set root = CreateObject("Scripting.Dictionary")
@@ -4434,10 +4774,11 @@ Function ExportFormToJson_Simple(app, formName, outputPath)
     AntiUI app
     
     ' Abrir el formulario en vista de diseño oculto
-    app.DoCmd.OpenForm formName, acDesign, , , , acHidden ' acDesign = 1, acHidden = 1
-    
-    ' Aplicar configuracion anti-UI despues de abrir
-    AntiUI app
+    If Not DoCmdSafe_OpenFormDesignHidden(app, formName, "ImportFormFromJson") Then
+        LogError "No se pudo abrir el formulario " & formName & " en modo diseno oculto"
+        CloseAccess_Robust app
+        Exit Function
+    End If
     
     ' Obtener referencia al formulario
     Dim frm
@@ -4498,6 +4839,11 @@ Function UI_UpdateSome_ByFile(app, jsonPath, targetName)
     app.DoCmd.CreateForm
     If FailIfErr("CreateForm en UI_UpdateSome_ByFile") Then Exit Function
     
+    ' Verificar responsividad tras CreateForm
+    If Not EnsureResponsive(app, "UI_UpdateSome_ByFile post-CreateForm") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras CreateForm en UI_UpdateSome_ByFile"
+    End If
+    
     ' Aplicar configuracion anti-UI despues de crear
     AntiUI app
     
@@ -4514,7 +4860,17 @@ Function UI_UpdateSome_ByFile(app, jsonPath, targetName)
     ' Aplicar configuracion anti-UI antes de renombrar
     AntiUI app
     
-    app.DoCmd.Rename tempFormName, acForm, tmpName ' acForm = -1
+    If Not DoCmdSafe_Rename(app, tempFormName, acForm, tmpName, "UI_UpdateSome_ByFile rename to temp") Then
+        LogMessage "ui-update-some: no se pudo renombrar a temporal"
+        Exit Function
+    End If
+    
+    ' Verificar que el renombrado fue exitoso
+    Dim activeName
+    If Not WaitActiveFormName(app, activeName) Or LCase(activeName) <> LCase(tempFormName) Then
+        LogError "ui-update-some: formulario no se renombró correctamente a " & tempFormName
+        Exit Function
+    End If
     
     ' Aplicar configuracion anti-UI despues de renombrar
     AntiUI app
@@ -4522,63 +4878,17 @@ Function UI_UpdateSome_ByFile(app, jsonPath, targetName)
     ' Cerrar el formulario temporal guardando cambios
     app.DoCmd.Close acForm, tempFormName, acSaveYes ' acForm, acSaveYes
     
-    ' Intentar swap atomico: renombrar original a backup y temporal a definitivo
-    Dim backupName: backupName = targetName & "__backup"
-    Dim swapSuccess: swapSuccess = False
-    
-    ' Aplicar configuracion anti-UI antes del swap
-    AntiUI app
-    
-    ' Primer intento de swap
-    On Error Resume Next
-    app.DoCmd.Rename backupName, acForm, targetName ' original -> backup
-    If FailIfErr("Rename " & targetName & " a backup en UI_UpdateSome_ByFile") Then
-        ' Error en primer rename - limpiar temporal
-        app.DoCmd.DeleteObject acForm, tempFormName
-        Exit Function
+    ' Verificar responsividad tras Close
+    If Not EnsureResponsive(app, "UI_UpdateSome_ByFile post-Close") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras Close en UI_UpdateSome_ByFile"
     End If
-    If Err.Number = 0 Then
-        app.DoCmd.Rename targetName, acForm, tempFormName ' temporal -> definitivo
-        If FailIfErr("Rename temporal a definitivo en UI_UpdateSome_ByFile") Then
-            ' Error en segundo rename - restaurar backup
-            app.DoCmd.Rename targetName, acForm, backupName
-            app.DoCmd.DeleteObject acForm, tempFormName
-            Exit Function
-        End If
-        swapSuccess = True
-        ' Eliminar backup
-        app.DoCmd.DeleteObject acForm, backupName ' acForm = -1
-        FailIfErr "DeleteObject backup en UI_UpdateSome_ByFile"
-    End If
-    Err.Clear
     
-    ' Si el swap fallo, intentar recuperacion
-    If Not swapSuccess Then
-        LogMessage "ui-update-some: swap atomico fallo, intentando recuperacion"
-        
-        ' Segundo intento
-        On Error Resume Next
-        app.DoCmd.Rename targetName, acForm, backupName ' restaurar original
-        app.DoCmd.Rename targetName, acForm, tempFormName ' temporal -> definitivo
-        If Err.Number = 0 Then
-            swapSuccess = True
-            app.DoCmd.DeleteObject acForm, backupName ' acForm = -1
-        End If
-        Err.Clear
-        
-        ' Si ambos intentos fallaron, limpiar formulario temporal de forma segura
-        If Not swapSuccess Then
-            LogMessage "ui-update-some: ambos intentos de swap fallaron, limpiando temporal"
-            On Error Resume Next
-            AntiUI app
-            ' Cerrar formulario temporal sin guardar
-            app.DoCmd.Close acObjForm, tempFormName, acSaveNo ' acObjForm, acSaveNo
-            ' Eliminar formulario temporal
-            app.DoCmd.DeleteObject acForm, tempFormName ' acForm = -1
-            Err.Clear
-            On Error GoTo 0
-            Exit Function
-        End If
+    ' Swap atomico usando SafeSwapForm
+    SafeSwapForm app, targetName, tempFormName
+    
+    ' Verificar responsividad tras operacion critica
+    If Not EnsureResponsive(app, "UI_UpdateSome_ByFile post-swap") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras SafeSwapForm en UI_UpdateSome_ByFile"
     End If
     
     UI_UpdateSome_ByFile = True
@@ -4611,7 +4921,7 @@ Function UI_UpdateSome(dbPath, items, config)
     ' Validacion fail-fast para VBE antes de continuar
     If Not CheckVBProjectAccess(app) Then
         LogError "ui-update: VBE no disponible - operacion abortada"
-        CloseAccess app
+        CloseAccess_Robust app
         UI_UpdateSome = False
         Exit Function
     End If
@@ -4772,6 +5082,11 @@ Function ProcessSingleFormFile(app, file, fso)
     app.DoCmd.CreateForm
     If FailIfErr("CreateForm en UI_RebuildAll_ByDir") Then Exit Function
     
+    ' Verificar responsividad tras CreateForm
+    If Not EnsureResponsive(app, "UI_RebuildAll_ByDir post-CreateForm") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras CreateForm en UI_RebuildAll_ByDir"
+    End If
+    
     ' Aplicar configuracion anti-UI despues de crear
     AntiUI app
     
@@ -4788,7 +5103,17 @@ Function ProcessSingleFormFile(app, file, fso)
     ' Aplicar configuracion anti-UI antes de renombrar
     AntiUI app
     
-    app.DoCmd.Rename tempFormName, acForm, tmpName ' acForm = -1
+    If Not DoCmdSafe_Rename(app, tempFormName, acForm, tmpName, "UI_UpdateOne_ByFile rename to temp") Then
+        LogMessage "ui-update-one: no se pudo renombrar a temporal"
+        Exit Function
+    End If
+    
+    ' Verificar que el renombrado fue exitoso
+    Dim activeName2
+    If Not WaitActiveFormName(app, activeName2) Or LCase(activeName2) <> LCase(tempFormName) Then
+        LogError "ui-update-one: formulario no se renombró correctamente a " & tempFormName
+        Exit Function
+    End If
     
     ' Aplicar configuracion anti-UI despues de renombrar
     AntiUI app
@@ -4796,52 +5121,17 @@ Function ProcessSingleFormFile(app, file, fso)
     ' Cerrar el formulario temporal guardando cambios
     app.DoCmd.Close acObjForm, tempFormName, acSaveYes ' acObjForm, acSaveYes
     
-    ' Intentar swap atomico
-    Dim backupName: backupName = baseName & "__backup"
-    Dim swapSuccess: swapSuccess = False
-    
-    ' Aplicar configuracion anti-UI antes del swap
-    AntiUI app
-    
-    ' Primer intento de swap
-    On Error Resume Next
-    app.DoCmd.Rename backupName, acForm, baseName ' original -> backup
-    If Err.Number = 0 Then
-        app.DoCmd.Rename baseName, acForm, tempFormName ' temporal -> definitivo
-        If Err.Number = 0 Then
-            swapSuccess = True
-            ' Eliminar backup
-            app.DoCmd.DeleteObject acForm, backupName ' acForm = -1
-        End If
+    ' Verificar responsividad tras Close
+    If Not EnsureResponsive(app, "UI_UpdateOne_ByFile post-Close") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras Close en UI_UpdateOne_ByFile"
     End If
-    Err.Clear
     
-    ' Si el swap fallo, intentar recuperacion
-    If Not swapSuccess Then
-        LogMessage "ui-rebuild-all: swap atomico fallo para " & baseName & ", intentando recuperacion"
-        
-        ' Segundo intento
-        On Error Resume Next
-        app.DoCmd.Rename baseName, acForm, backupName ' restaurar original
-        app.DoCmd.Rename baseName, acForm, tempFormName ' temporal -> definitivo
-        If Err.Number = 0 Then
-            swapSuccess = True
-            app.DoCmd.DeleteObject acForm, backupName ' acForm = 1
-        End If
-        Err.Clear
-        
-        ' Si ambos intentos fallaron, limpiar formulario temporal de forma segura
-        If Not swapSuccess Then
-            LogMessage "ui-rebuild-all: ambos intentos de swap fallaron para " & baseName & ", limpiando temporal"
-            On Error Resume Next
-            AntiUI app
-            ' Cerrar formulario temporal sin guardar
-            app.DoCmd.Close acObjForm, tempFormName, acSaveNo ' acObjForm, acSaveNo
-            ' Eliminar formulario temporal
-            app.DoCmd.DeleteObject acForm, tempFormName ' acForm = -1
-            Err.Clear
-            Exit Function
-        End If
+    ' Swap atomico usando SafeSwapForm
+    SafeSwapForm app, baseName, tempFormName
+    
+    ' Verificar responsividad tras operacion critica
+    If Not EnsureResponsive(app, "UI_UpdateOne_ByFile post-swap") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras SafeSwapForm en UI_UpdateOne_ByFile"
     End If
     
     ' Reportar assets faltantes para este formulario
@@ -4906,9 +5196,7 @@ Function ImportFormFromJson_Complete(dbPath, jsonPath, nameOpt, overwrite, dryRu
 
     ' Manejar overwrite
     If overwrite Then
-        On Error Resume Next
-        app.DoCmd.DeleteObject acForm, targetName
-        Err.Clear
+        DoCmdSafe_Delete app, acForm, targetName, "UI_UpdateSome_ByFile overwrite existing form"
     End If
 
     ' Modo dry-run
@@ -4916,11 +5204,11 @@ Function ImportFormFromJson_Complete(dbPath, jsonPath, nameOpt, overwrite, dryRu
         Dim dryReport: dryReport = ""
         If UI_DryRunCheck(root, dryReport) Then
             LogMessage "form-import(dry-run): " & dryReport
-            CloseAccess app
+            CloseAccess_Robust app
             ImportFormFromJson_Complete = True
         Else
             LogMessage "form-import(dry-run): " & dryReport
-            CloseAccess app
+            CloseAccess_Robust app
             ImportFormFromJson_Complete = False
         End If
         Exit Function
@@ -4935,9 +5223,15 @@ Function ImportFormFromJson_Complete(dbPath, jsonPath, nameOpt, overwrite, dryRu
     Err.Clear
     app.DoCmd.CreateForm
     If FailIfErr("CreateForm en ImportFormFromJson_Complete") Then
-        CloseAccess app
+        CloseAccess_Robust app
         Exit Function
     End If
+    
+    ' Verificar responsividad tras CreateForm
+    If Not EnsureResponsive(app, "ImportFormFromJson_Complete post-CreateForm") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras CreateForm en ImportFormFromJson_Complete"
+    End If
+    
     ' Reforzar anti-UI después de CreateForm
     AntiUI app
     
@@ -4945,21 +5239,27 @@ Function ImportFormFromJson_Complete(dbPath, jsonPath, nameOpt, overwrite, dryRu
     Dim created
     If Not WaitActiveFormName(app, created) Then
         LogMessage "form-import: no se pudo obtener ActiveForm tras CreateForm"
-        CloseAccess app
+        CloseAccess_Robust app
         Exit Function
     End If
-    On Error Resume Next
-    AntiUI app
-    Err.Clear
-    app.DoCmd.Rename tmpName, acForm, created
-    On Error Resume Next
-    AntiUI app
-    Err.Clear
-    app.DoCmd.OpenForm tmpName, acDesign, , , , acHidden
-    If FailIfErr("OpenForm " & tmpName & " en UI_UpdateSome_ByFile") Then Exit Function
-    ' Reforzar anti-UI después de OpenForm
-    AntiUI app
-    Err.Clear
+    If Not DoCmdSafe_Rename(app, tmpName, acForm, created, "UI_UpdateSome_ByFile rename created form") Then
+        LogMessage "ui-update-some: no se pudo renombrar formulario creado"
+        CloseAccess_Robust app
+        Exit Function
+    End If
+    
+    ' Verificar que el renombrado fue exitoso
+    Dim activeName3
+    If Not WaitActiveFormName(app, activeName3) Or LCase(activeName3) <> LCase(tmpName) Then
+        LogError "ui-update-some: formulario creado no se renombró correctamente a " & tmpName
+        CloseAccess_Robust app
+        Exit Function
+    End If
+    
+    If Not DoCmdSafe_OpenFormDesignHidden(app, tmpName, "UI_UpdateSome_ByFile open created form") Then
+        LogMessage "ui-update-some: no se pudo abrir formulario creado"
+        Exit Function
+    End If
 
     ' Guardar referencias para las siguientes fases (usando tmpName)
     Set ImportFormFromJson_app = app
@@ -4971,10 +5271,8 @@ Function ImportFormFromJson_Complete(dbPath, jsonPath, nameOpt, overwrite, dryRu
     If Not ImportFormFromJson_Apply() Then
         LogMessage "form-import: error en fase de aplicacion"
         ' Limpiar temporal en caso de error
-        On Error Resume Next
-        app.DoCmd.DeleteObject acForm, tmpName
-        Err.Clear
-        CloseAccess app
+        DoCmdSafe_Delete app, acForm, tmpName, "ImportFormFromJson_Complete cleanup after apply error"
+        CloseAccess_Robust app
         Exit Function
     End If
 
@@ -4982,9 +5280,7 @@ Function ImportFormFromJson_Complete(dbPath, jsonPath, nameOpt, overwrite, dryRu
     If Not ImportFormFromJson_Finalize() Then
         LogMessage "form-import: error en fase de finalizacion"
         ' Limpiar temporal en caso de error
-        On Error Resume Next
-        app.DoCmd.DeleteObject acForm, tmpName
-        Err.Clear
+        DoCmdSafe_Delete app, acForm, tmpName, "ImportFormFromJson_Complete cleanup after finalize error"
         Exit Function
     End If
 
@@ -5267,9 +5563,25 @@ Function ImportFormFromJson_Finalize()
     ' Swap atomico usando SafeSwapForm
     SafeSwapForm app, finalName, tmpName
     
+    ' Verificar responsividad tras operacion critica
+    If Not EnsureResponsive(app, "ImportFormFromJson_Finalize post-swap") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras SafeSwapForm en ImportFormFromJson_Finalize"
+    End If
+    
     On Error Resume Next
-    app.RunCommand acCmdCompileAndSaveAllModules                 ' acCmdCompileAndSaveAllModules
-    FailIfErr "RunCommand compile en ImportFormFromJson_Finalize"
+    
+    ' Verificar referencias antes de compilar
+    If Not CheckMissingReferences(app) Then
+        LogError "Abortando compilacion por referencias rotas."
+        CloseAccess_Robust app
+        WScript.Quit 2
+    End If
+    
+    If Not Maybe_DoCmd_CompileAndSaveAllModules(app, "ImportFormFromJson_Finalize") Then
+        LogError "Fallo al compilar y guardar modulos en ImportFormFromJson_Finalize"
+        CloseAccess_Robust app
+        WScript.Quit 2
+    End If
     On Error GoTo 0
     CloseAccess app
 
@@ -5295,7 +5607,7 @@ Function UI_RebuildAll_Complete(dbPath, files, config)
     ' Validacion fail-fast para VBE antes de continuar
     If Not CheckVBProjectAccess(app) Then
         LogError "ui-rebuild: VBE no disponible - operacion abortada"
-        CloseAccess app
+        CloseAccess_Robust app
         UI_RebuildAll_Complete = False
         Exit Function
     End If
@@ -5308,7 +5620,7 @@ Function UI_RebuildAll_Complete(dbPath, files, config)
     ' Validar array de archivos
     If Not IsArray(files) Or SafeUBound(files) < 0 Then
         LogMessage "ui-rebuild: no se encontraron formularios"
-        CloseAccess app
+        CloseAccess_Robust app
         UI_RebuildAll_Complete = True
         Exit Function
     End If
@@ -5323,6 +5635,11 @@ Function UI_RebuildAll_Complete(dbPath, files, config)
             If UI_ImportOne(app, formPath, tmpName) Then
                 ' Si la importacion temporal fue exitosa, hacer swap atomico
                 SafeSwapForm app, formName, tmpName
+                
+                ' Verificar responsividad tras operacion critica
+                If Not EnsureResponsive(app, "UI_RebuildSome post-swap for " & formName) Then
+                    LogMessage "ADVERTENCIA: Access no responde correctamente tras SafeSwapForm para " & formName
+                End If
             Else
                 LogMessage "ui-rebuild: error en " & formName & ", manteniendo version anterior"
             End If
@@ -5331,8 +5648,19 @@ Function UI_RebuildAll_Complete(dbPath, files, config)
 
     ' Compilacion global al final (como update/rebuild)
     On Error Resume Next
-    app.RunCommand acCmdCompileAndSaveAllModules  ' acCmdCompileAndSaveAllModules
-    FailIfErr "RunCommand compile en UI_RebuildAll_Complete"
+    
+    ' Verificar referencias antes de compilar
+    If Not CheckMissingReferences(app) Then
+        LogError "Abortando compilacion por referencias rotas."
+        CloseAccess_Robust app
+        WScript.Quit 2
+    End If
+    
+    If Not Maybe_DoCmd_CompileAndSaveAllModules(app, "UI_RebuildAll_Complete") Then
+        LogError "Fallo al compilar y guardar modulos en UI_RebuildAll_Complete"
+        CloseAccess_Robust app
+        WScript.Quit 2
+    End If
     On Error GoTo 0
     CloseAccess app
     UI_RebuildAll_Complete = True
@@ -5394,6 +5722,12 @@ Function UI_ImportOne(app, formPath, formName)
         LogMessage "ui-import: no se pudo crear temporal: " & Err.Description
         Exit Function
     End If
+    
+    ' Verificar responsividad tras CreateForm
+    If Not EnsureResponsive(app, "UI_ImportOne post-CreateForm") Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras CreateForm en UI_ImportOne"
+    End If
+    
     Err.Clear
     
     ' Aplicar configuracion anti-UI despues de crear
@@ -5411,30 +5745,23 @@ Function UI_ImportOne(app, formPath, formName)
         AntiUI app
     
     ' Renombrar temporal con anti-UI
-    On Error Resume Next
-        AntiUI app
-    app.DoCmd.Rename tmpName, acForm, created
-    If Err.Number <> 0 Then
-        LogMessage "ui-import: no se pudo renombrar temporal: " & Err.Description
-        Err.Clear
-        On Error GoTo 0
+    If Not DoCmdSafe_Rename(app, tmpName, acForm, created, "UI_ImportOne rename temp") Then
+        LogMessage "ui-import: no se pudo renombrar temporal"
         Exit Function
     End If
-    Err.Clear
-    On Error GoTo 0
+    
+    ' Verificar que el renombrado fue exitoso
+    Dim activeName4
+    If Not WaitActiveFormName(app, activeName4) Or LCase(activeName4) <> LCase(tmpName) Then
+        LogError "ui-import: formulario no se renombró correctamente a " & tmpName
+        Exit Function
+    End If
     
     ' Abrir en modo diseño con anti-UI
-    On Error Resume Next
-        AntiUI app
-    app.DoCmd.OpenForm tmpName, acDesign, , , , acHidden
-    If Err.Number <> 0 Then
-        LogMessage "ui-import: no se pudo abrir temporal en diseño: " & Err.Description
-        Err.Clear
-        On Error GoTo 0
+    If Not DoCmdSafe_OpenFormDesignHidden(app, tmpName, "UI_ImportOne open temp") Then
+        LogMessage "ui-import: no se pudo abrir temporal en diseño"
         Exit Function
     End If
-    Err.Clear
-    On Error GoTo 0
     
     Dim frm: Set frm = app.Forms(tmpName)
 
@@ -5553,6 +5880,11 @@ Function UI_ImportOne(app, formPath, formName)
     
     ' Swap atomico usando SafeSwapForm
     SafeSwapForm app, formName, tmpName
+    
+    ' Verificar responsividad tras operacion critica
+    If Not EnsureResponsive(app, "UI_ImportOne post-swap for " & formName) Then
+        LogMessage "ADVERTENCIA: Access no responde correctamente tras SafeSwapForm para " & formName
+    End If
     
     ' Cerrar el formulario ya renombrado con anti-UI
     On Error Resume Next
@@ -5696,11 +6028,7 @@ Sub ApplyEventHandlers(app, formName, controlDict, handlers)
     controlName = controlDict("name")
     
     ' Abrir formulario en modo diseño para acceder al control con anti-UI
-        AntiUI app
-    app.DoCmd.OpenForm formName, acDesign, , , , acHidden
-    If Err.Number <> 0 Then
-        Err.Clear
-        On Error GoTo 0
+    If Not DoCmdSafe_OpenFormDesignHidden(app, formName, "ApplyControlProperties open form") Then
         Exit Sub
     End If
     Set frm = app.Forms(formName)
