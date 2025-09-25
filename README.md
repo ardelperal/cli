@@ -1,4 +1,148 @@
-# CLI para Microsoft Access - Estado Final
+# CLI para Microsoft Access
+
+Herramienta de línea de comandos desarrollada en VBScript para gestionar bases de datos de Microsoft Access y sus objetos. Diseñada para integración continua con proyectos de Access y VBA.
+
+## Características Principales
+
+- **Gestión de objetos de Access**: Listar tablas, formularios, consultas y módulos
+- **Exportación de formularios**: Exportar formularios de Access a formato JSON
+- **Soporte para bases de datos protegidas**: Manejo de contraseñas
+- **Configuración flexible**: Archivo INI para parámetros de configuración
+- **Modo de prueba**: Simulación de operaciones con `--dry-run`
+- **Logging detallado**: Registro de operaciones con modo verbose
+
+## Comandos Disponibles
+
+### list-objects
+Lista todos los objetos de una base de datos de Access.
+
+```bash
+cscript cli.vbs list-objects <db_path> [--password <pwd>] [--schema] [--output]
+```
+
+**Parámetros:**
+- `<db_path>`: Ruta a la base de datos de Access
+- `--password <pwd>`: Contraseña de la base de datos (opcional)
+- `--schema`: Muestra detalles de campos en las tablas (opcional)
+- `--output`: Exporta resultados a archivo `[nombre_bd]_listobjects.txt` (opcional)
+
+**Ejemplo:**
+```bash
+cscript cli.vbs list-objects Expedientes.accdb --password mipassword --schema --output
+```
+
+### export-form
+Exporta un formulario de Access a formato JSON.
+
+```bash
+cscript cli.vbs export-form <db_path> <form_name> [--password <pwd>]
+```
+
+**Parámetros:**
+- `<db_path>`: Ruta a la base de datos de Access
+- `<form_name>`: Nombre del formulario a exportar
+- `--password <pwd>`: Contraseña de la base de datos (opcional)
+
+**Ejemplo:**
+```bash
+cscript cli.vbs export-form Expedientes.accdb FormularioTest --password mipassword
+```
+
+### Opciones Globales
+
+- `--dry-run`: Simula la operación sin ejecutarla
+- `--verbose`: Muestra información detallada de la operación
+- `--help`: Muestra la ayuda del comando
+
+## Configuración
+
+El archivo `cli.ini` contiene la configuración de la herramienta:
+
+```ini
+[GENERAL]
+DryRun = false
+Verbose = false
+LogFile = cli.log
+
+[ACCESS]
+AutomationSecurity = 3
+DefaultOpenMode = 1
+DefaultRecordLocking = 0
+
+[UI]
+Root = .\ui
+FormsDir = forms
+AssetsDir = assets
+AssetsImgDir = img
+AssetsImgExtensions = .png,.jpg,.jpeg,.gif,.bmp
+IncludeSubdirectories = true
+FormFilePattern = *.json
+NameFromFileBase = true
+```
+
+## Estructura de Archivos
+
+```
+cli/
+├── cli.vbs              # Script principal
+├── cli.ini              # Archivo de configuración
+├── cli.log              # Archivo de log
+├── README.md            # Este archivo
+├── docs/                # Documentación
+├── ui/                  # Archivos de interfaz
+│   └── forms/           # Formularios exportados en JSON
+└── assets/              # Recursos adicionales
+```
+
+## Requisitos
+
+- Microsoft Access instalado
+- Windows Script Host (WSH)
+- Permisos para acceder al modelo de objetos VBA de Access
+
+## Uso Básico
+
+1. **Listar objetos de una base de datos:**
+   ```bash
+   cscript cli.vbs list-objects MiBaseDatos.accdb
+   ```
+
+2. **Exportar un formulario:**
+   ```bash
+   cscript cli.vbs export-form MiBaseDatos.accdb MiFormulario
+   ```
+
+3. **Modo de prueba:**
+   ```bash
+   cscript cli.vbs --dry-run list-objects MiBaseDatos.accdb
+   ```
+
+4. **Con información detallada:**
+   ```bash
+   cscript cli.vbs --verbose list-objects MiBaseDatos.accdb --schema
+   ```
+
+## Notas Técnicas
+
+- La herramienta maneja automáticamente la apertura y cierre seguro de Access
+- Soporta bases de datos con y sin contraseña
+- Los formularios se exportan con toda su estructura de controles y propiedades
+- El modo `--schema` incluye información detallada de tipos de campos en tablas
+- Los logs se guardan automáticamente en `cli.log`
+
+## Estado del Desarrollo
+
+✅ **Completado:**
+- Comando `list-objects` con soporte completo para parámetros
+- Comando `export-form` funcional
+- Manejo seguro de bases de datos con contraseña
+- Sistema de configuración INI
+- Logging y modo verbose
+
+🔄 **En desarrollo:**
+- Comandos adicionales para gestión de módulos VBA
+- Importación de formularios desde JSON
+- Sincronización bidireccional - Estado Final
 
 Herramienta de desarrollo implementada en VBScript para gestionar bases de datos de Microsoft Access desde línea de comandos.
 
