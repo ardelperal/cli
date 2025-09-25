@@ -4,159 +4,143 @@
   "properties": {
     "caption": "EXPEDIENTES Versión 2025-015 Administrador",
     "width": 13833,
-    "height": 7484,
     "recordSource": "",
     "modal": falso,
     "popUp": falso
   },
-  "controls": [
-    {
-      "name": "lblTitulo",
-      "type": "Unknown(100)",
-      "left": 300,
-      "top": 30,
-      "width": 12660,
-      "height": 465
-
+  "sections": {
+    "detail": {
+      "height": 7484,
+      "controls": [
+        {
+          "name": "ControlDeNavegación0",
+          "type": "Unknown(129)",
+          "left": 330,
+          "top": 165,
+          "width": 13378,
+          "height": 435
+        },        {
+          "name": "NavGeneral",
+          "type": "Unknown(130)",
+          "left": 330,
+          "top": 165,
+          "width": 1440,
+          "height": 435
+        },        {
+          "name": "NavFechas",
+          "type": "Unknown(130)",
+          "left": 1800,
+          "top": 165,
+          "width": 1440,
+          "height": 435
+        },        {
+          "name": "NavEntidades",
+          "type": "Unknown(130)",
+          "left": 3270,
+          "top": 165,
+          "width": 1995,
+          "height": 435
+        },        {
+          "name": "NavSuministradores",
+          "type": "Unknown(130)",
+          "left": 5295,
+          "top": 165,
+          "width": 1755,
+          "height": 435
+        },        {
+          "name": "NavAnexos",
+          "type": "Unknown(130)",
+          "left": 7080,
+          "top": 165,
+          "width": 1440,
+          "height": 435
+        },        {
+          "name": "NavHitos",
+          "type": "Unknown(130)",
+          "left": 8550,
+          "top": 165,
+          "width": 1440,
+          "height": 435
+        },        {
+          "name": "BotónDeNavegación69",
+          "type": "Unknown(130)",
+          "left": 10020,
+          "top": 165,
+          "width": 1440,
+          "height": 435
+        },        {
+          "name": "BotónDeNavegación1",
+          "type": "Unknown(130)",
+          "left": 11490,
+          "top": 165,
+          "width": 1665,
+          "height": 435
+        },        {
+          "name": "FrmDetalle",
+          "type": "Subform",
+          "left": 330,
+          "top": 660,
+          "width": 13378,
+          "height": 6690
+        }
+      ]
     },
-    {
-      "name": "ComandoAyuda",
-      "type": "Label",
-      "left": 13090,
-      "top": 45,
-      "width": 618,
-      "height": 618
-,
-      "caption": "Salir"
+    "header": {
+      "height": 680,
+      "controls": [
+        {
+          "name": "lblTitulo",
+          "type": "Unknown(100)",
+          "left": 300,
+          "top": 30,
+          "width": 12660,
+          "height": 465
+        },        {
+          "name": "ComandoAyuda",
+          "type": "Label",
+          "left": 13090,
+          "top": 45,
+          "width": 618,
+          "height": 618,
+          "caption": "Salir"
+        }
+      ]
     },
-    {
-      "name": "ControlDeNavegación0",
-      "type": "Unknown(129)",
-      "left": 330,
-      "top": 165,
-      "width": 13378,
-      "height": 435
-
-    },
-    {
-      "name": "NavGeneral",
-      "type": "Unknown(130)",
-      "left": 330,
-      "top": 165,
-      "width": 1440,
-      "height": 435
-
-    },
-    {
-      "name": "NavFechas",
-      "type": "Unknown(130)",
-      "left": 1800,
-      "top": 165,
-      "width": 1440,
-      "height": 435
-
-    },
-    {
-      "name": "NavEntidades",
-      "type": "Unknown(130)",
-      "left": 3270,
-      "top": 165,
-      "width": 1995,
-      "height": 435
-
-    },
-    {
-      "name": "NavSuministradores",
-      "type": "Unknown(130)",
-      "left": 5295,
-      "top": 165,
-      "width": 1755,
-      "height": 435
-
-    },
-    {
-      "name": "NavAnexos",
-      "type": "Unknown(130)",
-      "left": 7080,
-      "top": 165,
-      "width": 1440,
-      "height": 435
-
-    },
-    {
-      "name": "NavHitos",
-      "type": "Unknown(130)",
-      "left": 8550,
-      "top": 165,
-      "width": 1440,
-      "height": 435
-
-    },
-    {
-      "name": "BotónDeNavegación69",
-      "type": "Unknown(130)",
-      "left": 10020,
-      "top": 165,
-      "width": 1440,
-      "height": 435
-
-    },
-    {
-      "name": "BotónDeNavegación1",
-      "type": "Unknown(130)",
-      "left": 11490,
-      "top": 165,
-      "width": 1665,
-      "height": 435
-
-    },
-    {
-      "name": "FrmDetalle",
-      "type": "Subform",
-      "left": 330,
-      "top": 660,
-      "width": 13378,
-      "height": 6690
-
-    },
-    {
-      "name": "lblModificacion",
-      "type": "Unknown(100)",
-      "left": 240,
-      "top": 30,
-      "width": 7785,
-      "height": 300
-
-    },
-    {
-      "name": "cmdSalir",
-      "type": "Label",
-      "left": 13289,
-      "top": 60,
-      "width": 454,
-      "height": 455
-,
-      "caption": "Salir"
-    },
-    {
-      "name": "ComandoRegistrar",
-      "type": "Label",
-      "left": 12420,
-      "top": 60,
-      "width": 454,
-      "height": 455
-,
-      "caption": "Editar"
-    },
-    {
-      "name": "ComandoActualizarCompleto",
-      "type": "Label",
-      "left": 11595,
-      "top": 60,
-      "width": 454,
-      "height": 455
-,
-      "caption": "Editar"
+    "footer": {
+      "height": 575,
+      "controls": [
+        {
+          "name": "lblModificacion",
+          "type": "Unknown(100)",
+          "left": 240,
+          "top": 30,
+          "width": 7785,
+          "height": 300
+        },        {
+          "name": "cmdSalir",
+          "type": "Label",
+          "left": 13289,
+          "top": 60,
+          "width": 454,
+          "height": 455,
+          "caption": "Salir"
+        },        {
+          "name": "ComandoRegistrar",
+          "type": "Label",
+          "left": 12420,
+          "top": 60,
+          "width": 454,
+          "height": 455,
+          "caption": "Editar"
+        },        {
+          "name": "ComandoActualizarCompleto",
+          "type": "Label",
+          "left": 11595,
+          "top": 60,
+          "width": 454,
+          "height": 455,
+          "caption": "Editar"
+        }
+      ]
     }
-  ]
-}
+  }

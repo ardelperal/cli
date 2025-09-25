@@ -414,6 +414,9 @@ Sub ShowHelp()
     WScript.Echo "  export-form <db_path> <form_name> [--output <path>] [--password <pwd>]"
     WScript.Echo "    Exporta un formulario a JSON"
     WScript.Echo ""
+    WScript.Echo "  import-form <db_path> <form_name_or_path> [--password <pwd>]"
+    WScript.Echo "    Importa un formulario desde JSON (nombre busca en ui\forms)"
+    WScript.Echo ""
     WScript.Echo "  ui-rebuild [db_path]"
     WScript.Echo "    Reconstruye todos los formularios JSON ubicados en /ui hacia Access"
     WScript.Echo ""
@@ -444,6 +447,8 @@ Sub ShowHelp()
     WScript.Echo "  cscript cli.vbs rebuild"
     WScript.Echo "  cscript cli.vbs update ModuloA,ModuloB"
     WScript.Echo "  cscript cli.vbs export-form ""C:\mi_base.accdb"" MainForm --output ""C:\salida\MainForm.json"""
+    WScript.Echo "  cscript cli.vbs import-form ""C:\mi_base.accdb"" FormExpediente"
+    WScript.Echo "  cscript cli.vbs import-form ""C:\mi_base.accdb"" ""C:\salida\MainForm.json"""
     WScript.Echo "  cscript cli.vbs ui-rebuild"
     WScript.Echo "  cscript cli.vbs ui-update ""C:\mi_base.accdb"" forms\MainForm.json forms\Users.json"
     WScript.Echo "  cscript cli.vbs ui-touch MainForm"
@@ -2193,6 +2198,84 @@ Sub Main()
                 WScript.Echo "Uso: cscript cli.vbs export-form <db_path> <form_name> [--output <path>] [--password <pwd>]"
                 WScript.Echo "  --output <path>  : Especifica la ruta de salida del archivo JSON"
                 WScript.Echo "  --password <pwd> : Especifica la contraseña de la base de datos"
+                ShowHelp
+            End If
+            
+        Case "import-form"
+            If cleanArgCount >= 2 Then
+                Dim strDbPath3, strFormNameOrPath3, strJsonPath3, strPassword3
+                Dim i5, config3
+                Set config3 = LoadConfig(gConfigPath)
+                Call EnsureConfigLoaded()
+                
+                ' Determinar base de datos (por defecto CONDOR.accdb si no se especifica)
+                If cleanArgCount >= 3 And (InStr(cleanArgs(1), ".accdb") > 0 Or InStr(cleanArgs(1), ".mdb") > 0) Then
+                    ' Primer argumento es la base de datos
+                    strDbPath3 = ResolvePath(cleanArgs(1))
+                    strFormNameOrPath3 = cleanArgs(2)
+                Else
+                    ' Solo se especifica el formulario, usar base de datos por defecto
+                    strDbPath3 = ResolvePath(CfgGet(config3, "DATABASE_DefaultPath", "DATABASE.DefaultPath", "CONDOR.accdb"))
+                    strFormNameOrPath3 = cleanArgs(1)
+                End If
+                
+                strPassword3 = gPassword
+                
+                ' Determinar si es un nombre de formulario o una ruta
+                If InStr(strFormNameOrPath3, "\") > 0 Or InStr(strFormNameOrPath3, "/") > 0 Or InStr(strFormNameOrPath3, ".json") > 0 Then
+                    ' Es una ruta (absoluta, relativa o con extensión)
+                    strJsonPath3 = ResolvePath(strFormNameOrPath3)
+                Else
+                    ' Es un nombre de formulario, buscar en ui\forms
+                    strJsonPath3 = gScriptDir & "\ui\forms\" & strFormNameOrPath3 & ".json"
+                End If
+                
+                ' Procesar argumentos opcionales
+                Dim startIdx
+                If cleanArgCount >= 3 And (InStr(cleanArgs(1), ".accdb") > 0 Or InStr(cleanArgs(1), ".mdb") > 0) Then
+                    startIdx = 3
+                Else
+                    startIdx = 2
+                End If
+                
+                For i5 = startIdx To cleanArgCount - 1
+                    If LCase(cleanArgs(i5)) = "--password" And i5 < cleanArgCount - 1 Then
+                        strPassword3 = cleanArgs(i5 + 1)
+                    ElseIf LCase(cleanArgs(i5)) = "--json-name" And i5 < cleanArgCount - 1 Then
+                        ' Modificador para especificar nombre de JSON diferente
+                        strJsonPath3 = gScriptDir & "\ui\forms\" & cleanArgs(i5 + 1) & ".json"
+                    ElseIf LCase(cleanArgs(i5)) = "--dbpath" And i5 < cleanArgCount - 1 Then
+                        ' Modificador para especificar base de datos diferente
+                        strDbPath3 = ResolvePath(cleanArgs(i5 + 1))
+                    End If
+                Next
+                
+                If Not gDryRun Then
+                    ImportFormFromJSON strDbPath3, strJsonPath3, strPassword3
+                Else
+                    LogMessage "SIMULACION: Importaria formulario desde " & strJsonPath3 & " a " & strDbPath3
+                End If
+            Else
+                LogError "Faltan argumentos para import-form"
+                WScript.Echo "Uso: cscript cli.vbs import-form <form_name> [opciones]"
+                WScript.Echo "      cscript cli.vbs import-form <db_path> <form_name_or_path> [opciones]"
+                WScript.Echo ""
+                WScript.Echo "PARAMETROS:"
+                WScript.Echo "  <form_name>          : Nombre del formulario (usa BD por defecto y busca en ui\forms)"
+                WScript.Echo "  <db_path>            : Ruta de la base de datos Access"
+                WScript.Echo "  <form_name_or_path>  : Nombre del formulario o ruta al JSON"
+                WScript.Echo ""
+                WScript.Echo "OPCIONES:"
+                WScript.Echo "  --password <pwd>     : Especifica la contraseña de la base de datos"
+                WScript.Echo "  --json-name <name>   : Especifica nombre de JSON diferente al formulario"
+                WScript.Echo "  --dbpath <path>      : Especifica base de datos diferente a la por defecto"
+                WScript.Echo ""
+                WScript.Echo "EJEMPLOS:"
+                WScript.Echo "  cscript cli.vbs import-form FormExpediente"
+                WScript.Echo "  cscript cli.vbs import-form FormExpediente --password mipass"
+                WScript.Echo "  cscript cli.vbs import-form FormExpediente --dbpath ""C:\mi_base.accdb"""
+                WScript.Echo "  cscript cli.vbs import-form ""C:\mi_base.accdb"" FormExpediente"
+                WScript.Echo "  cscript cli.vbs import-form ""C:\mi_base.accdb"" ""C:\ruta\MiForm.json"""
                 ShowHelp
             End If
             
@@ -4206,12 +4289,6 @@ Function GenerateFormJson(frm)
         Err.Clear
     End If
     
-    json = json & "    ""height"": " & frm.Section(0).Height & "," & vbCrLf
-    If Err.Number <> 0 Then
-        If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Height: " & Err.Description
-        Err.Clear
-    End If
-    
     json = json & "    ""recordSource"": """ & EscapeJsonString(frm.RecordSource) & """," & vbCrLf
     If Err.Number <> 0 Then
         If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo RecordSource: " & Err.Description
@@ -4231,96 +4308,976 @@ Function GenerateFormJson(frm)
     End If
     
     json = json & "  }," & vbCrLf
-    json = json & "  ""controls"": [" & vbCrLf
     
-    ' SONDA JSON 3: Procesar controles
-    If gVerbose Then WScript.Echo "[SONDA JSON] Procesando " & frm.Controls.Count & " controles..."
+    ' SONDA JSON 2.5: Generar secciones del formulario
+    If gVerbose Then WScript.Echo "[SONDA JSON] Generando secciones del formulario..."
+    json = json & "  ""sections"": {" & vbCrLf
+    json = json & GenerateFormSections(frm)
+    json = json & "  }" & vbCrLf
     
-    ' Procesar controles
-    For i = 0 To frm.Controls.Count - 1
-        If gVerbose Then WScript.Echo "[SONDA JSON] Procesando control " & (i + 1) & " de " & frm.Controls.Count
-        
-        Set ctrl = frm.Controls(i)
-        If ctrl Is Nothing Then
-            If gVerbose Then WScript.Echo "[SONDA JSON] Control " & i & " es Nothing, saltando..."
-        Else
-            If gVerbose Then WScript.Echo "[SONDA JSON] Control: " & ctrl.Name & " (Tipo: " & ctrl.ControlType & ")"
-            
-            If i > 0 Then json = json & "," & vbCrLf
-            
-            json = json & "    {" & vbCrLf
-            json = json & "      ""name"": """ & EscapeJsonString(ctrl.Name) & """," & vbCrLf
-            If Err.Number <> 0 Then
-                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Name del control " & i & ": " & Err.Description
-                Err.Clear
-            End If
-            
-            json = json & "      ""type"": """ & GetControlTypeName(ctrl.ControlType) & """," & vbCrLf
-            If Err.Number <> 0 Then
-                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo ControlType del control " & i & ": " & Err.Description
-                Err.Clear
-            End If
-            
-            json = json & "      ""left"": " & ctrl.Left & "," & vbCrLf
-            If Err.Number <> 0 Then
-                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Left del control " & i & ": " & Err.Description
-                Err.Clear
-            End If
-            
-            json = json & "      ""top"": " & ctrl.Top & "," & vbCrLf
-            If Err.Number <> 0 Then
-                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Top del control " & i & ": " & Err.Description
-                Err.Clear
-            End If
-            
-            json = json & "      ""width"": " & ctrl.Width & "," & vbCrLf
-            If Err.Number <> 0 Then
-                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Width del control " & i & ": " & Err.Description
-                Err.Clear
-            End If
-            
-            json = json & "      ""height"": " & ctrl.Height & vbCrLf
-            If Err.Number <> 0 Then
-                If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Height del control " & i & ": " & Err.Description
-                Err.Clear
-            End If
-            
-            ' SONDA JSON 4: Agregar propiedades específicas según el tipo de control
-            If gVerbose Then WScript.Echo "[SONDA JSON] Agregando propiedades especificas para tipo " & ctrl.ControlType
-            
-            If ctrl.ControlType = 109 Then ' TextBox
-                json = json & "," & vbCrLf & "      ""controlSource"": """ & EscapeJsonString(ctrl.ControlSource) & """"
-                If Err.Number <> 0 Then
-                    If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo ControlSource del TextBox: " & Err.Description
-                    Err.Clear
-                End If
-            ElseIf ctrl.ControlType = 104 Then ' Label
-                json = json & "," & vbCrLf & "      ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
-                If Err.Number <> 0 Then
-                    If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Caption del Label: " & Err.Description
-                    Err.Clear
-                End If
-            ElseIf ctrl.ControlType = 105 Then ' CommandButton
-                json = json & "," & vbCrLf & "      ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
-                If Err.Number <> 0 Then
-                    If gVerbose Then WScript.Echo "[SONDA JSON] Error obteniendo Caption del CommandButton: " & Err.Description
-                    Err.Clear
-                End If
-            End If
-            
-            json = json & vbCrLf & "    }"
-        End If
-    Next
-    
-    json = json & vbCrLf & "  ]" & vbCrLf
-    json = json & "}" & vbCrLf
     
     ' SONDA JSON 5: Finalizar generación
-    If gVerbose Then WScript.Echo "[SONDA JSON] JSON generado exitosamente, longitud: " & Len(json) & " caracteres"
+    If gVerbose Then WScript.Echo "[SONDA JSON] JSON generado exitosamente"
     
     On Error GoTo 0
     
     GenerateFormJson = json
+End Function
+
+' Nueva función para generar las secciones del formulario con sus controles
+Function GenerateFormSections(frm)
+    Dim json, ctrl, i, sectionName, sectionIndex
+    Dim detailControls, headerControls, footerControls
+    Dim hasDetail, hasHeader, hasFooter
+    
+    ' SONDA SECTIONS 1: Iniciar análisis de secciones
+    If gVerbose Then WScript.Echo "[SONDA SECTIONS] Analizando secciones del formulario..."
+    
+    On Error Resume Next
+    
+    ' Inicializar arrays de controles por sección
+    detailControls = ""
+    headerControls = ""
+    footerControls = ""
+    hasDetail = False
+    hasHeader = False
+    hasFooter = False
+    
+    ' Verificar qué secciones existen
+    If frm.Section(0).Height > 0 Then ' acDetail = 0
+        hasDetail = True
+        If gVerbose Then WScript.Echo "[SONDA SECTIONS] Seccion Detail encontrada, altura: " & frm.Section(0).Height
+    End If
+    
+    If frm.Section(1).Height > 0 Then ' acHeader = 1
+        hasHeader = True
+        If gVerbose Then WScript.Echo "[SONDA SECTIONS] Seccion Header encontrada, altura: " & frm.Section(1).Height
+    End If
+    
+    If frm.Section(2).Height > 0 Then ' acFooter = 2
+        hasFooter = True
+        If gVerbose Then WScript.Echo "[SONDA SECTIONS] Seccion Footer encontrada, altura: " & frm.Section(2).Height
+    End If
+    
+    ' SONDA SECTIONS 2: Clasificar controles por sección
+    If gVerbose Then WScript.Echo "[SONDA SECTIONS] Clasificando " & frm.Controls.Count & " controles por seccion..."
+    
+    For i = 0 To frm.Controls.Count - 1
+        Set ctrl = frm.Controls(i)
+        If Not (ctrl Is Nothing) Then
+            sectionIndex = ctrl.Section
+            If gVerbose Then WScript.Echo "[SONDA SECTIONS] Control " & ctrl.Name & " en seccion " & sectionIndex
+            
+            Select Case sectionIndex
+                Case 0 ' Detail
+                    If detailControls <> "" Then detailControls = detailControls & ","
+                    detailControls = detailControls & GenerateControlJson(ctrl)
+                Case 1 ' Header
+                    If headerControls <> "" Then headerControls = headerControls & ","
+                    headerControls = headerControls & GenerateControlJson(ctrl)
+                Case 2 ' Footer
+                    If footerControls <> "" Then footerControls = footerControls & ","
+                    footerControls = footerControls & GenerateControlJson(ctrl)
+            End Select
+        End If
+    Next
+    
+    ' SONDA SECTIONS 3: Generar JSON de secciones
+    If gVerbose Then WScript.Echo "[SONDA SECTIONS] Generando JSON de secciones..."
+    
+    json = ""
+    
+    ' Sección Detail (siempre presente)
+    If hasDetail Then
+        json = json & "    ""detail"": {" & vbCrLf
+        json = json & "      ""height"": " & frm.Section(0).Height & "," & vbCrLf
+        json = json & "      ""controls"": [" & vbCrLf
+        If detailControls <> "" Then
+            json = json & detailControls & vbCrLf
+        End If
+        json = json & "      ]" & vbCrLf
+        json = json & "    }"
+    End If
+    
+    ' Sección Header
+    If hasHeader Then
+        If json <> "" Then json = json & ","
+        json = json & vbCrLf & "    ""header"": {" & vbCrLf
+        json = json & "      ""height"": " & frm.Section(1).Height & "," & vbCrLf
+        json = json & "      ""controls"": [" & vbCrLf
+        If headerControls <> "" Then
+            json = json & headerControls & vbCrLf
+        End If
+        json = json & "      ]" & vbCrLf
+        json = json & "    }"
+    End If
+    
+    ' Sección Footer
+    If hasFooter Then
+        If json <> "" Then json = json & ","
+        json = json & vbCrLf & "    ""footer"": {" & vbCrLf
+        json = json & "      ""height"": " & frm.Section(2).Height & "," & vbCrLf
+        json = json & "      ""controls"": [" & vbCrLf
+        If footerControls <> "" Then
+            json = json & footerControls & vbCrLf
+        End If
+        json = json & "      ]" & vbCrLf
+        json = json & "    }"
+    End If
+    
+    json = json & vbCrLf
+    
+    On Error GoTo 0
+    
+    GenerateFormSections = json
+End Function
+
+' Crea un backup del formulario existente
+Function CreateFormBackup(app, formName)
+    On Error Resume Next
+    
+    Dim backupName, counter, db
+    Set db = app.CurrentDb
+    
+    ' Verificar primero que el formulario existe
+    If Not FormExists(db, formName) Then
+        LogError "El formulario " & formName & " no existe para hacer backup"
+        CreateFormBackup = ""
+        Exit Function
+    End If
+    
+    ' Generar nombre único para el backup con timestamp limpio (YYYYMMDD_HHNNSS)
+    Dim timestamp
+    timestamp = GetTimestamp()
+    backupName = formName & "_Backup_" & timestamp
+    counter = 1
+    
+    ' Verificar si ya existe un backup con ese nombre (máximo 10 intentos)
+    Do While FormExists(db, backupName) And counter <= 10
+        backupName = formName & "_Backup_" & timestamp & "_" & counter
+        counter = counter + 1
+    Loop
+    
+    ' Si después de 10 intentos no encontramos nombre único, usar uno simple
+    If counter > 10 Then
+        backupName = formName & "_Backup_temp"
+        LogMessage "Usando nombre de backup temporal: " & backupName
+    End If
+    
+    LogMessage "Intentando crear backup con nombre: " & backupName
+    
+    ' Copiar el formulario usando CopyObject (método recomendado)
+    app.DoCmd.CopyObject , backupName, 2, formName ' 2 = acForm
+    
+    If Err.Number = 0 Then
+        LogMessage "Backup creado exitosamente: " & backupName
+        CreateFormBackup = backupName
+    Else
+        LogError "Error al crear backup: " & Err.Description
+        CreateFormBackup = ""
+        Err.Clear
+    End If
+    
+On Error GoTo 0
+End Function
+
+' Verifica si un formulario existe en la base de datos
+Function FormExists(db, formName)
+    On Error Resume Next
+    
+    LogMessage "Verificando existencia del formulario: " & formName
+    
+    ' Usar la misma lógica que ListObjects para verificar formularios
+    Dim frm
+    For Each frm In db.Application.CurrentProject.AllForms
+        If UCase(frm.Name) = UCase(formName) Then
+            LogMessage "Formulario encontrado: " & frm.Name
+            FormExists = True
+            Exit Function
+        End If
+    Next
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error al verificar formulario: " & Err.Description
+        Err.Clear
+    End If
+    
+    FormExists = False
+    LogMessage "Formulario no encontrado: " & formName
+    
+    On Error GoTo 0
+End Function
+
+' Restaura un formulario desde su backup
+Function RestoreFormFromBackup(app, originalName, backupName)
+    On Error Resume Next
+    
+    Dim db
+    Set db = app.CurrentDb
+    
+    ' Eliminar el formulario actual si existe
+    If FormExists(db, originalName) Then
+        app.DoCmd.DeleteObject 2, originalName ' 2 = acForm
+    End If
+    
+    ' Copiar el backup al nombre original
+    app.DoCmd.CopyObject , originalName, 2, backupName ' 2 = acForm
+    
+    If Err.Number = 0 Then
+        LogMessage "Formulario restaurado desde backup: " & originalName
+        RestoreFormFromBackup = True
+    Else
+        LogError "Error al restaurar desde backup: " & Err.Description
+        RestoreFormFromBackup = False
+        Err.Clear
+    End If
+    
+    On Error GoTo 0
+End Function
+
+' Elimina el backup del formulario
+Sub DeleteFormBackup(app, backupName)
+    On Error Resume Next
+    
+    If backupName <> "" Then
+        app.DoCmd.DeleteObject 2, backupName ' 2 = acForm
+        If Err.Number = 0 Then
+            LogMessage "Backup eliminado: " & backupName
+        Else
+            LogError "Error al eliminar backup: " & Err.Description
+            Err.Clear
+        End If
+    End If
+    
+    On Error GoTo 0
+End Sub
+
+' Verifica que los controles del JSON existen realmente en el formulario
+Function VerifyControlsFromJson(frm, jsonContent)
+    On Error Resume Next
+    
+    Dim controlsVerified, totalControls, existingControls
+    controlsVerified = True
+    totalControls = 0
+    existingControls = 0
+    
+    LogMessage "Iniciando verificacion de controles..."
+    
+    ' Verificar controles de la sección detail
+    If InStr(jsonContent, """detail""") > 0 Then
+        If Not VerifyControlsInSection(frm, jsonContent, "detail", totalControls, existingControls) Then
+            controlsVerified = False
+        End If
+    End If
+    
+    ' Verificar controles de la sección header
+    If InStr(jsonContent, """header""") > 0 Then
+        If Not VerifyControlsInSection(frm, jsonContent, "header", totalControls, existingControls) Then
+            controlsVerified = False
+        End If
+    End If
+    
+    ' Verificar controles de la sección footer
+    If InStr(jsonContent, """footer""") > 0 Then
+        If Not VerifyControlsInSection(frm, jsonContent, "footer", totalControls, existingControls) Then
+            controlsVerified = False
+        End If
+    End If
+    
+    LogMessage "Verificacion completada. Controles esperados: " & totalControls & ", Controles encontrados: " & existingControls
+    
+    If controlsVerified And existingControls >= (totalControls * 0.8) Then ' Al menos 80% de los controles deben existir
+        LogMessage "Verificacion exitosa: formulario importado correctamente"
+        VerifyControlsFromJson = True
+    Else
+        LogError "Verificacion fallida: faltan controles o hay errores"
+        VerifyControlsFromJson = False
+    End If
+    
+    On Error GoTo 0
+End Function
+
+' Verifica controles en una sección específica
+Function VerifyControlsInSection(frm, jsonContent, sectionName, ByRef totalControls, ByRef existingControls)
+    On Error Resume Next
+    
+    Dim sectionStart, sectionEnd, controlsStart, controlsEnd
+    Dim controlName, pos, nextComma, nextBrace
+    
+    ' Encontrar la sección
+    sectionStart = InStr(jsonContent, """" & sectionName & """")
+    If sectionStart = 0 Then
+        VerifyControlsInSection = True
+        Exit Function
+    End If
+    
+    ' Encontrar el array de controles
+    controlsStart = InStr(sectionStart, jsonContent, """controls""")
+    If controlsStart = 0 Then
+        VerifyControlsInSection = True
+        Exit Function
+    End If
+    
+    controlsStart = InStr(controlsStart, jsonContent, "[")
+    controlsEnd = FindMatchingBracket(jsonContent, controlsStart)
+    
+    ' Buscar cada control en la sección
+    pos = controlsStart + 1
+    Do While pos < controlsEnd
+        ' Buscar el siguiente nombre de control
+        pos = InStr(pos, jsonContent, """name""")
+        If pos = 0 Or pos > controlsEnd Then Exit Do
+        
+        pos = InStr(pos, jsonContent, ":")
+        pos = InStr(pos, jsonContent, """") + 1
+        nextComma = InStr(pos, jsonContent, """")
+        
+        If nextComma > 0 And nextComma < controlsEnd Then
+            controlName = Mid(jsonContent, pos, nextComma - pos)
+            totalControls = totalControls + 1
+            
+            ' Verificar si el control existe en el formulario
+            If ControlExistsInForm(frm, controlName) Then
+                existingControls = existingControls + 1
+                LogMessage "Control verificado OK: " & controlName
+            Else
+                LogMessage "Control NO encontrado: " & controlName
+            End If
+        End If
+        
+        pos = nextComma + 1
+    Loop
+    
+    VerifyControlsInSection = True
+    On Error GoTo 0
+End Function
+
+' Verifica si un control existe en el formulario
+Function ControlExistsInForm(frm, controlName)
+    On Error Resume Next
+    
+    Dim ctrl
+    Set ctrl = frm.Controls(controlName)
+    
+    If Err.Number = 0 And Not ctrl Is Nothing Then
+        ControlExistsInForm = True
+    Else
+        ControlExistsInForm = False
+        Err.Clear
+    End If
+    
+    Set ctrl = Nothing
+    On Error GoTo 0
+End Function
+
+' Importa un formulario desde un archivo JSON
+Sub ImportFormFromJSON(dbPath, jsonPath, password)
+    On Error Resume Next
+    
+    LogMessage "Iniciando importacion de formulario desde " & jsonPath
+    LogMessage "Ruta completa del JSON: " & jsonPath
+    LogMessage "gScriptDir: " & gScriptDir
+    
+    ' Crear una nueva instancia de FileSystemObject para asegurar que funcione
+    Dim fso
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    ' Verificar que el archivo JSON existe
+    If Not fso.FileExists(jsonPath) Then
+        LogError "El archivo JSON no existe: " & jsonPath
+        LogMessage "Verificando si el directorio padre existe: " & fso.GetParentFolderName(jsonPath)
+        If fso.FolderExists(fso.GetParentFolderName(jsonPath)) Then
+            LogMessage "El directorio padre SI existe"
+            ' Listar archivos en el directorio
+            Dim folder, file
+            Set folder = fso.GetFolder(fso.GetParentFolderName(jsonPath))
+            LogMessage "Archivos en el directorio:"
+            For Each file In folder.Files
+                LogMessage "  - " & file.Name
+            Next
+        Else
+            LogMessage "El directorio padre NO existe"
+        End If
+        Set fso = Nothing
+        Exit Sub
+    End If
+    
+    ' Leer el contenido del archivo JSON con codificación UTF-8
+    Dim jsonContent, jsonFile
+    Set jsonFile = fso.OpenTextFile(jsonPath, 1, False, 0) ' 0 = ASCII/UTF-8
+    jsonContent = jsonFile.ReadAll
+    jsonFile.Close
+    Set jsonFile = Nothing
+    
+    LogMessage "Contenido JSON leido correctamente. Longitud: " & Len(jsonContent)
+    LogMessage "Primeros 200 caracteres: " & Left(jsonContent, 200)
+    
+    ' Parsear el JSON básico (implementación simple)
+    Dim formName, formData
+    formName = ExtractJsonValue(jsonContent, "formName")
+    
+    LogMessage "Nombre del formulario extraido: [" & formName & "]"
+    
+    If formName = "" Then
+        LogError "No se pudo extraer el nombre del formulario del JSON"
+        Exit Sub
+    End If
+    
+    LogMessage "Importando formulario: " & formName
+    
+    ' Abrir la base de datos usando la función canónica
+    Dim app
+    Set app = OpenAccess(dbPath, password)
+    If app Is Nothing Then
+        LogError "No se pudo abrir la base de datos: " & dbPath
+        Exit Sub
+    End If
+    
+    Dim db
+    Set db = app.CurrentDb
+    
+    ' Verificar si el formulario ya existe y crear backup si es necesario
+    Dim existingForm, backupName
+    existingForm = FormExists(db, formName)
+    backupName = ""
+    
+    If existingForm Then
+        LogMessage "El formulario " & formName & " ya existe. Creando backup antes de modificar..."
+        backupName = CreateFormBackup(app, formName)
+        
+        If backupName = "" Then
+            LogMessage "No se pudo crear backup. Cancelando importacion por seguridad."
+            CloseAccess app
+            Exit Sub
+        Else
+            LogMessage "Backup creado exitosamente: " & backupName
+            ' Abrir el formulario existente en vista de diseño para modificarlo
+            app.DoCmd.OpenForm formName, 0 ' 0 = acDesign
+        End If
+    Else
+        LogMessage "El formulario " & formName & " no existe. Creando nuevo formulario."
+        ' Crear un nuevo formulario básico
+        app.DoCmd.NewForm
+        app.DoCmd.Save , formName
+        ' Abrir el formulario en vista de diseño
+        app.DoCmd.OpenForm formName, 0 ' 0 = acDesign
+    End If
+    
+    Dim frm
+    Set frm = app.Forms(formName)
+    
+    ' Aplicar propiedades básicas del formulario
+    ApplyFormPropertiesFromJson frm, jsonContent
+    
+    ' Crear/editar controles desde el JSON de forma completa
+    CreateCompleteControlsFromJson frm, jsonContent
+    
+    ' Guardar y cerrar
+    app.DoCmd.Save
+    app.DoCmd.Close 2, formName ' 2 = acForm
+    
+    ' Verificar que la importación fue exitosa
+    Dim importSuccess
+    importSuccess = VerifyFormControls(app, formName, jsonContent)
+    
+    If importSuccess Then
+        LogMessage "Verificacion exitosa. Importacion completada correctamente."
+        ' Eliminar el backup si todo salió bien
+        If backupName <> "" Then
+            DeleteFormBackup app, backupName
+        End If
+    Else
+        LogError "Verificacion fallida. Restaurando formulario desde backup..."
+        If backupName <> "" Then
+            If RestoreFormFromBackup(app, formName, backupName) Then
+                LogMessage "Formulario restaurado exitosamente desde backup."
+            Else
+                LogError "Error critico: No se pudo restaurar el formulario desde backup."
+            End If
+        Else
+            LogError "No hay backup disponible para restaurar."
+        End If
+    End If
+    
+    ' Cerrar Access usando método canónico
+    On Error Resume Next
+    app.CloseCurrentDatabase
+    app.Quit
+    Set frm = Nothing
+    Set db = Nothing
+    Set app = Nothing
+    On Error GoTo 0
+    
+    LogMessage "Formulario importado exitosamente: " & formName
+    
+    If Err.Number <> 0 Then
+        LogError "Error durante la importacion: " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
+' Extrae un valor simple de un JSON (implementación básica)
+Function ExtractJsonValue(jsonText, key)
+    Dim pattern, startPos, endPos, valueStart, valueEnd
+    
+    ' Buscar la clave
+    pattern = """" & key & """:"
+    startPos = InStr(jsonText, pattern)
+    
+    If startPos = 0 Then
+        ExtractJsonValue = ""
+        Exit Function
+    End If
+    
+    ' Encontrar el inicio del valor
+    valueStart = startPos + Len(pattern)
+    
+    ' Saltar espacios en blanco
+    Do While Mid(jsonText, valueStart, 1) = " " Or Mid(jsonText, valueStart, 1) = vbTab
+        valueStart = valueStart + 1
+    Loop
+    
+    ' Si es una cadena (empieza con ")
+    If Mid(jsonText, valueStart, 1) = """" Then
+        valueStart = valueStart + 1
+        valueEnd = InStr(valueStart, jsonText, """")
+        If valueEnd > 0 Then
+            ExtractJsonValue = Mid(jsonText, valueStart, valueEnd - valueStart)
+        Else
+            ExtractJsonValue = ""
+        End If
+    Else
+        ' Si es un número o booleano
+        valueEnd = valueStart
+        Do While valueEnd <= Len(jsonText)
+            Dim char
+            char = Mid(jsonText, valueEnd, 1)
+            If char = "," Or char = "}" Or char = "]" Or char = vbCrLf Or char = vbCr Or char = vbLf Then
+                Exit Do
+            End If
+            valueEnd = valueEnd + 1
+        Loop
+        ExtractJsonValue = Trim(Mid(jsonText, valueStart, valueEnd - valueStart))
+    End If
+End Function
+
+' Aplica propiedades básicas del formulario desde JSON
+Sub ApplyFormPropertiesFromJson(frm, jsonContent)
+    On Error Resume Next
+    
+    ' Extraer y aplicar propiedades básicas
+    Dim width, recordSource, caption
+    
+    width = ExtractJsonValue(jsonContent, "width")
+    If width <> "" And IsNumeric(width) Then
+        frm.Width = CLng(width)
+    End If
+    
+    recordSource = ExtractJsonValue(jsonContent, "recordSource")
+    If recordSource <> "" Then
+        frm.RecordSource = recordSource
+    End If
+    
+    caption = ExtractJsonValue(jsonContent, "caption")
+    If caption <> "" Then
+        frm.Caption = caption
+    End If
+    
+    If Err.Number <> 0 Then
+        LogMessage "Advertencia al aplicar propiedades del formulario: " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
+' Crea/edita controles completos desde la información JSON
+Sub CreateCompleteControlsFromJson(frm, jsonContent)
+    On Error Resume Next
+    
+    LogMessage "Creando controles completos desde JSON"
+    
+    ' Crear/editar controles de cada sección
+    CreateSectionControlsFromJson frm, jsonContent, "detail", 0
+    CreateSectionControlsFromJson frm, jsonContent, "header", 1
+    CreateSectionControlsFromJson frm, jsonContent, "footer", 2
+    
+    If Err.Number <> 0 Then
+        LogMessage "Advertencia al crear controles completos: " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
+' Elimina controles que no están definidos en el JSON
+Sub RemoveControlsNotInJson(frm, jsonContent)
+    On Error Resume Next
+    
+    LogMessage "Eliminando controles no definidos en JSON"
+    
+    ' Obtener lista de controles del JSON
+    Dim jsonControls
+    Set jsonControls = CreateObject("Scripting.Dictionary")
+    
+    ' Extraer nombres de controles de todas las secciones
+    ExtractControlNamesFromSection jsonControls, jsonContent, "detail"
+    ExtractControlNamesFromSection jsonControls, jsonContent, "header"
+    ExtractControlNamesFromSection jsonControls, jsonContent, "footer"
+    
+    ' Eliminar controles que no están en el JSON
+    Dim i, controlName
+    For i = frm.Controls.Count - 1 To 0 Step -1
+        controlName = frm.Controls(i).Name
+        If Not jsonControls.Exists(controlName) Then
+            LogMessage "Eliminando control no definido en JSON: " & controlName
+            frm.Controls.Remove controlName
+        End If
+    Next
+    
+    If Err.Number <> 0 Then
+        LogMessage "Advertencia al eliminar controles: " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
+' Extrae nombres de controles de una sección del JSON
+Sub ExtractControlNamesFromSection(controlDict, jsonContent, sectionName)
+    On Error Resume Next
+    
+    ' Buscar la sección en el JSON
+    Dim sectionStart, sectionEnd, controlsStart, controlsEnd
+    Dim sectionPattern, controlsPattern
+    
+    sectionPattern = """" & sectionName & """: {"
+    sectionStart = InStr(jsonContent, sectionPattern)
+    
+    If sectionStart > 0 Then
+        controlsPattern = """controls"": ["
+        controlsStart = InStr(sectionStart, jsonContent, controlsPattern)
+        
+        If controlsStart > 0 Then
+            controlsStart = controlsStart + Len(controlsPattern)
+            controlsEnd = FindMatchingBracket(jsonContent, controlsStart - 1, "[", "]")
+            
+            If controlsEnd > controlsStart Then
+                Dim controlsSection
+                controlsSection = Mid(jsonContent, controlsStart, controlsEnd - controlsStart)
+                
+                ' Extraer nombres de controles
+                Dim pos, nameStart, nameEnd, controlName
+                pos = 1
+                
+                Do While pos < Len(controlsSection)
+                    nameStart = InStr(pos, controlsSection, """name"": """)
+                    If nameStart = 0 Then Exit Do
+                    
+                    nameStart = nameStart + 9 ' Longitud de "name": "
+                    nameEnd = InStr(nameStart, controlsSection, """")
+                    
+                    If nameEnd > nameStart Then
+                        controlName = Mid(controlsSection, nameStart, nameEnd - nameStart)
+                        controlDict.Add controlName, True
+                        pos = nameEnd + 1
+                    Else
+                        Exit Do
+                    End If
+                Loop
+            End If
+        End If
+    End If
+    
+    If Err.Number <> 0 Then
+        Err.Clear
+    End If
+End Sub
+
+' Crea controles de una sección específica
+Sub CreateSectionControlsFromJson(frm, jsonContent, sectionName, sectionIndex)
+    On Error Resume Next
+    
+    LogMessage "Creando controles para seccion: " & sectionName
+    
+    ' Buscar la sección en el JSON
+    Dim sectionStart, controlsStart, controlsEnd
+    Dim sectionPattern, controlsPattern
+    
+    sectionPattern = """" & sectionName & """: {"
+    sectionStart = InStr(jsonContent, sectionPattern)
+    
+    If sectionStart > 0 Then
+        controlsPattern = """controls"": ["
+        controlsStart = InStr(sectionStart, jsonContent, controlsPattern)
+        
+        If controlsStart > 0 Then
+            controlsStart = controlsStart + Len(controlsPattern)
+            controlsEnd = FindMatchingBracket(jsonContent, controlsStart - 1, "[", "]")
+            
+            If controlsEnd > controlsStart Then
+                Dim controlsSection
+                controlsSection = Mid(jsonContent, controlsStart, controlsEnd - controlsStart)
+                
+                ' Procesar cada control
+                ProcessControlsInSection frm, controlsSection, sectionIndex
+            End If
+        End If
+    End If
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error al crear controles de seccion " & sectionName & ": " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
+' Procesa controles individuales en una sección
+Sub ProcessControlsInSection(frm, controlsSection, sectionIndex)
+    On Error Resume Next
+    
+    Dim pos, controlStart, controlEnd
+    pos = 1
+    
+    Do While pos < Len(controlsSection)
+        ' Buscar inicio de control
+        controlStart = InStr(pos, controlsSection, "{")
+        If controlStart = 0 Then Exit Do
+        
+        ' Buscar fin de control
+        controlEnd = FindMatchingBracket(controlsSection, controlStart, "{", "}")
+        If controlEnd = 0 Then Exit Do
+        
+        ' Extraer datos del control
+        Dim controlJson
+        controlJson = Mid(controlsSection, controlStart, controlEnd - controlStart + 1)
+        
+        ' Crear o editar el control
+        CreateOrEditControl frm, controlJson, sectionIndex
+        
+        pos = controlEnd + 1
+    Loop
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error al procesar controles: " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
+' Crea o edita un control individual
+Sub CreateOrEditControl(frm, controlJson, sectionIndex)
+    On Error Resume Next
+    
+    ' Extraer propiedades del control
+    Dim controlName, controlType, left, top, width, height, caption
+    
+    controlName = ExtractJsonValue(controlJson, "name")
+    controlType = ExtractJsonValue(controlJson, "type")
+    left = ExtractJsonValue(controlJson, "left")
+    top = ExtractJsonValue(controlJson, "top")
+    width = ExtractJsonValue(controlJson, "width")
+    height = ExtractJsonValue(controlJson, "height")
+    caption = ExtractJsonValue(controlJson, "caption")
+    
+    If controlName = "" Then Exit Sub
+    
+    LogMessage "Procesando control: " & controlName & " (" & controlType & ")"
+    
+    ' Verificar si el control ya existe
+    Dim ctrl, controlExists
+    controlExists = False
+    Set ctrl = Nothing
+    
+    Dim i
+    For i = 0 To frm.Controls.Count - 1
+        If frm.Controls(i).Name = controlName Then
+            Set ctrl = frm.Controls(i)
+            controlExists = True
+            Exit For
+        End If
+    Next
+    
+    ' Si no existe, crearlo usando la sintaxis correcta del ejemplo
+    If Not controlExists Then
+        Dim accessControlType
+        accessControlType = GetAccessControlType(controlType)
+        
+        If accessControlType > 0 Then
+            ' Usar la sintaxis correcta: CreateControl(nombreFormulario, tipo, seccion, padre, columna, left, top, width, height)
+            Dim nombreFormulario
+            nombreFormulario = frm.Name
+            
+            ' Determinar la sección correcta
+            Dim seccionAccess
+            If sectionIndex = 0 Then
+                seccionAccess = 0 ' acDetail
+            ElseIf sectionIndex = 1 Then
+                seccionAccess = 1 ' acHeader  
+            Else
+                seccionAccess = 2 ' acFooter
+            End If
+            
+            ' Convertir valores a números
+            Dim leftNum, topNum, widthNum, heightNum
+            leftNum = 0
+            topNum = 0
+            widthNum = 1000
+            heightNum = 300
+            
+            If IsNumeric(left) And left <> "" Then leftNum = CLng(left)
+            If IsNumeric(top) And top <> "" Then topNum = CLng(top)
+            If IsNumeric(width) And width <> "" Then widthNum = CLng(width)
+            If IsNumeric(height) And height <> "" Then heightNum = CLng(height)
+            
+            ' Crear el control con la sintaxis correcta
+            Set ctrl = Application.CreateControl(nombreFormulario, accessControlType, seccionAccess, "", "", leftNum, topNum, widthNum, heightNum)
+            
+            If Err.Number = 0 And Not ctrl Is Nothing Then
+                ctrl.Name = controlName
+                LogMessage "Control creado exitosamente: " & controlName
+            Else
+                LogMessage "Error al crear control " & controlName & ": " & Err.Description
+                Err.Clear
+                Exit Sub
+            End If
+        Else
+            LogMessage "Tipo de control no soportado: " & controlType
+            Exit Sub
+        End If
+    Else
+        LogMessage "Control existente encontrado: " & controlName
+    End If
+    
+    ' Aplicar propiedades solo si el control existe
+    If Not ctrl Is Nothing Then
+        ' Aplicar posición y tamaño
+        If IsNumeric(left) And left <> "" Then 
+            ctrl.Left = CLng(left)
+            If Err.Number <> 0 Then
+                LogMessage "Error al establecer Left para " & controlName & ": " & Err.Description
+                Err.Clear
+            End If
+        End If
+        
+        If IsNumeric(top) And top <> "" Then 
+            ctrl.Top = CLng(top)
+            If Err.Number <> 0 Then
+                LogMessage "Error al establecer Top para " & controlName & ": " & Err.Description
+                Err.Clear
+            End If
+        End If
+        
+        If IsNumeric(width) And width <> "" Then 
+            ctrl.Width = CLng(width)
+            If Err.Number <> 0 Then
+                LogMessage "Error al establecer Width para " & controlName & ": " & Err.Description
+                Err.Clear
+            End If
+        End If
+        
+        If IsNumeric(height) And height <> "" Then 
+            ctrl.Height = CLng(height)
+            If Err.Number <> 0 Then
+                LogMessage "Error al establecer Height para " & controlName & ": " & Err.Description
+                Err.Clear
+            End If
+        End If
+        
+        ' Aplicar caption/text
+        If caption <> "" Then
+            ' Intentar Caption primero
+            ctrl.Caption = caption
+            If Err.Number <> 0 Then
+                Err.Clear
+                ' Si falla, intentar Text
+                ctrl.Text = caption
+                If Err.Number <> 0 Then
+                    Err.Clear
+                End If
+            End If
+        End If
+    End If
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error final al procesar control " & controlName & ": " & Err.Description
+        Err.Clear
+    End If
+End Sub
+
+' Convierte tipo de control JSON a tipo de Access
+Function GetAccessControlType(jsonType)
+    Select Case LCase(jsonType)
+        Case "label"
+            GetAccessControlType = 104 ' acLabel
+        Case "textbox"
+            GetAccessControlType = 109 ' acTextBox
+        Case "combobox"
+            GetAccessControlType = 111 ' acComboBox
+        Case "listbox"
+            GetAccessControlType = 110 ' acListBox
+        Case "commandbutton", "button"
+            GetAccessControlType = 105 ' acCommandButton
+        Case "subform"
+            GetAccessControlType = 112 ' acSubform
+        Case "unknown(100)"
+            GetAccessControlType = 104 ' acLabel (por defecto)
+        Case "unknown(104)"
+            GetAccessControlType = 104 ' acLabel
+        Case "unknown(105)"
+            GetAccessControlType = 105 ' acCommandButton
+        Case "unknown(109)"
+            GetAccessControlType = 109 ' acTextBox
+        Case "unknown(129)", "unknown(130)"
+            GetAccessControlType = 105 ' acCommandButton (navegación)
+        Case Else
+            GetAccessControlType = 104 ' acLabel por defecto
+    End Select
+End Function
+
+' Encuentra el bracket de cierre correspondiente
+Function FindMatchingBracket(text, startPos, openBracket, closeBracket)
+    Dim pos, level, char
+    pos = startPos + 1
+    level = 1
+    
+    Do While pos <= Len(text) And level > 0
+        char = Mid(text, pos, 1)
+        If char = openBracket Then
+            level = level + 1
+        ElseIf char = closeBracket Then
+            level = level - 1
+        End If
+        pos = pos + 1
+    Loop
+    
+    If level = 0 Then
+        FindMatchingBracket = pos - 1
+    Else
+        FindMatchingBracket = 0
+    End If
+End Function
+
+' Función auxiliar para generar JSON de un control individual
+Function GenerateControlJson(ctrl)
+    Dim json
+    
+    On Error Resume Next
+    
+    json = "        {" & vbCrLf
+    json = json & "          ""name"": """ & EscapeJsonString(ctrl.Name) & """," & vbCrLf
+    json = json & "          ""type"": """ & GetControlTypeName(ctrl.ControlType) & """," & vbCrLf
+    json = json & "          ""left"": " & ctrl.Left & "," & vbCrLf
+    json = json & "          ""top"": " & ctrl.Top & "," & vbCrLf
+    json = json & "          ""width"": " & ctrl.Width & "," & vbCrLf
+    json = json & "          ""height"": " & ctrl.Height
+    
+    ' Agregar propiedades específicas según el tipo de control
+    If ctrl.ControlType = 109 Then ' TextBox
+        json = json & "," & vbCrLf & "          ""controlSource"": """ & EscapeJsonString(ctrl.ControlSource) & """"
+    ElseIf ctrl.ControlType = 104 Then ' Label
+        json = json & "," & vbCrLf & "          ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
+    ElseIf ctrl.ControlType = 105 Then ' CommandButton
+        json = json & "," & vbCrLf & "          ""caption"": """ & EscapeJsonString(ctrl.Caption) & """"
+    End If
+    
+    json = json & vbCrLf & "        }"
+    
+    On Error GoTo 0
+    
+    GenerateControlJson = json
 End Function
 
 Function GetControlTypeName(controlType)
@@ -4339,6 +5296,19 @@ Function GetControlTypeName(controlType)
         Case 119: GetControlTypeName = "Image"
         Case Else: GetControlTypeName = "Unknown(" & controlType & ")"
     End Select
+End Function
+
+' Función auxiliar para generar una marca de tiempo YYYYMMDD_HHNNSS
+Function GetTimestamp()
+    Dim dtNow, s
+    dtNow = Now
+    s = Year(dtNow) & _
+        Right("0" & Month(dtNow), 2) & _
+        Right("0" & Day(dtNow), 2) & "_" & _
+        Right("0" & Hour(dtNow), 2) & _
+        Right("0" & Minute(dtNow), 2) & _
+        Right("0" & Second(dtNow), 2)
+    GetTimestamp = s
 End Function
 
 Function EscapeJsonString(str)
