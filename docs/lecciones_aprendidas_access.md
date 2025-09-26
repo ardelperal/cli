@@ -549,8 +549,169 @@ y = y + ALTO_CONTROL + ESPACIO_VERTICAL
 - ✅ Access se cierra completamente sin procesos zombie
 - ✅ Las operaciones son repetibles y confiables
 
+## 🏗️ PRINCIPIO ARQUITECTÓNICO CRÍTICO: Patrón Singleton para Access
+
+### ⚠️ REGLA DE ORO: UN SOLO OBJETO ACCESS POR PROCESO
+
+**PRINCIPIO FUNDAMENTAL:** Toda funcionalidad de esta herramienta CLI debe seguir estrictamente el patrón singleton para el manejo de objetos Access. Esto es **CRÍTICO** para evitar conflictos, mejorar rendimiento y prevenir procesos zombie.
+
+### ❌ ANTI-PATRÓN: Múltiples Aperturas de Access
+
+```vbscript
+' ❌ NUNCA HACER ESTO - Cada función abre su propio Access
+Function UpdateModules(dbPath)
+    Dim objAccess
+    Set objAccess = CreateObject("Access.Application")  ' ❌ Apertura redundante
+    ' ... operaciones ...
+    objAccess.Quit
+End Function
+
+Function RebuildProject(dbPath)
+    Dim objAccess
+    Set objAccess = CreateObject("Access.Application")  ' ❌ Otra apertura redundante
+    ' ... operaciones ...
+    objAccess.Quit
+End Function
+```
+
+### ✅ PATRÓN CORRECTO: Singleton con Paso de Parámetros
+
+```vbscript
+' ✅ PATRÓN SINGLETON CORRECTO
+Sub Main()
+    Dim objAccess
+    Set objAccess = OpenAccessCanonical(dbPath)  ' Una sola apertura
+    
+    Select Case command
+        Case "update"
+            UpdateModules objAccess, srcPath  ' Pasar objeto existente
+        Case "rebuild"
+            RebuildProject objAccess, srcPath  ' Pasar objeto existente
+    End Select
+    
+    CloseAccessCanonical objAccess  ' Un solo cierre
+End Sub
+
+' ✅ Funciones que reciben objAccess como parámetro
+Function UpdateModules(objAccess, srcPath)
+    ' NO crear nuevo objeto Access
+    ' Usar el objeto pasado como parámetro
+    ' ... operaciones con objAccess ...
+End Function
+
+Function RebuildProject(objAccess, srcPath)
+    ' NO crear nuevo objeto Access
+    ' Usar el objeto pasado como parámetro
+    ' ... operaciones con objAccess ...
+End Function
+```
+
+### 🔧 Implementación del Patrón Singleton
+
+#### 1. Funciones de Apertura/Cierre Centralizadas
+
+```vbscript
+' Función canónica para abrir Access (una sola vez por proceso)
+Function OpenAccessCanonical(dbPath)
+    Dim objAccess
+    Set objAccess = CreateObject("Access.Application")
+    
+    ' Configuración singleton estándar
+    objAccess.Visible = False
+    objAccess.UserControl = False
+    objAccess.OpenCurrentDatabase dbPath, False
+    
+    ' Aplicar configuraciones anti-UI
+    Call ConfigurarModoSilencioso(objAccess)
+    
+    Set OpenAccessCanonical = objAccess
+End Function
+
+' Función canónica para cerrar Access (una sola vez por proceso)
+Sub CloseAccessCanonical(objAccess)
+    On Error Resume Next
+    objAccess.CloseCurrentDatabase
+    objAccess.Quit acQuitSaveNone
+    Set objAccess = Nothing
+    On Error GoTo 0
+End Sub
+```
+
+#### 2. Refactoring de Funciones Existentes
+
+**ANTES (Anti-patrón):**
+```vbscript
+Function UpdateModules(dbPath, srcPath)
+    Dim objAccess
+    Set objAccess = CreateObject("Access.Application")  ' ❌ Apertura interna
+    ' ... operaciones ...
+    objAccess.Quit  ' ❌ Cierre interno
+End Function
+```
+
+**DESPUÉS (Patrón Singleton):**
+```vbscript
+Function UpdateModules(objAccess, srcPath)
+    ' ✅ Recibe objAccess como parámetro
+    ' ✅ NO abre ni cierra Access internamente
+    ' ... operaciones con objAccess ...
+End Function
+```
+
+### 🎯 Beneficios del Patrón Singleton
+
+1. **Rendimiento:** Una sola inicialización de Access por proceso
+2. **Estabilidad:** Evita conflictos entre múltiples instancias
+3. **Recursos:** Menor consumo de memoria y CPU
+4. **Debugging:** Más fácil rastrear problemas
+5. **Mantenibilidad:** Gestión centralizada del ciclo de vida de Access
+
+### 📋 Checklist de Implementación Singleton
+
+**Para TODA nueva funcionalidad:**
+
+- [ ] ✅ La función principal abre Access UNA sola vez
+- [ ] ✅ Todas las subfunciones reciben `objAccess` como parámetro
+- [ ] ✅ NINGUNA subfunción crea su propio objeto Access
+- [ ] ✅ NINGUNA subfunción cierra Access internamente
+- [ ] ✅ La función principal cierra Access al final
+- [ ] ✅ Manejo de errores preserva el patrón singleton
+- [ ] ✅ Variables de Access tienen nombres únicos (evitar "Name redefined")
+
+### 🚨 Resolución de Conflictos de Variables
+
+**Problema:** Error "Name redefined" con variables `objAccess`
+
+**Solución:** Usar nombres únicos por contexto:
+```vbscript
+Select Case command
+    Case "rebuild"
+        Dim objAccess  ' Para rebuild
+        Set objAccess = OpenAccessCanonical(dbPath)
+        RebuildProject objAccess, srcPath
+        CloseAccessCanonical objAccess
+        
+    Case "update"
+        Dim objAccessUpdate  ' ✅ Nombre único para evitar conflicto
+        Set objAccessUpdate = OpenAccessCanonical(dbPath)
+        UpdateModules objAccessUpdate, srcPath
+        CloseAccessCanonical objAccessUpdate
+End Select
+```
+
+### 🔄 Migración a cli_master_reference.vbs
+
+**IMPORTANTE:** Este patrón singleton debe ser la base arquitectónica para la migración completa a `cli_master_reference.vbs`. Toda funcionalidad nueva debe implementarse siguiendo estos principios desde el inicio.
+
+**Criterios de Migración:**
+- ✅ Todas las funciones siguen el patrón singleton
+- ✅ Gestión centralizada de Access en función principal
+- ✅ Paso de parámetros en lugar de creación interna de objetos
+- ✅ Nombres de variables únicos y descriptivos
+- ✅ Manejo robusto de errores que preserva el singleton
+
 ---
 
 **Fecha de creación:** $(Get-Date)  
-**Última actualización:** Pendiente de completar tests restantes  
+**Última actualización:** Implementación patrón singleton Access - Diciembre 2024  
 **Estado:** Documento vivo - actualizar con cada nueva lección aprendida
