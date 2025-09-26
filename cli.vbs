@@ -59,7 +59,7 @@ Const acPage = 124
 
 Dim objFSO, objArgs, objConfig
 Dim gVerbose, gQuiet, gDryRun, gDebug
-Dim gDbPath, gPassword, gOutputPath, gConfigPath, gScriptPath, gScriptDir
+Dim gDbPath, gOutputPath, gConfigPath, gScriptPath, gScriptDir
 Dim g_ModulesSrcPath, g_ModulesExtensions, g_ModulesIncludeSubdirs
 Dim gConfig
 
@@ -190,6 +190,14 @@ Sub ShowHelp()
     WScript.Echo "  update <db_path>"
     WScript.Echo "    Actualizar modulos VBA desde src"
     WScript.Echo ""
+    WScript.Echo "  schema [<db_path>] [--table <tabla>] [--out <ruta>] [--format <json|md>] [--password <pwd>]"
+    WScript.Echo "    Exporta el esquema de la base de datos"
+    WScript.Echo "    - Si no se especifica db_path, usa DATABASE_DefaultPath del config"
+    WScript.Echo "    - --table: exportar solo una tabla específica (por defecto: todas las tablas)"
+    WScript.Echo "    - --out: directorio de salida (por defecto: output/schema/<db_name>)"
+    WScript.Echo "    - --format: formato de salida json o md (por defecto: json)"
+    WScript.Echo "    - --password: contraseña de la base de datos si está protegida"
+    WScript.Echo ""
     WScript.Echo "OPCIONES:"
     WScript.Echo "  --config <path>       - Archivo de configuracion (por defecto: cli.ini)"
     WScript.Echo "  --password <pwd>      - Contrasena de la base de datos"
@@ -309,49 +317,77 @@ End Sub
 ' Cada llamada crea una nueva instancia independiente
 ' ===========================================================================
 Function OpenAccessCanonical(dbPath, password)
-    On Error Resume Next
+    Dim objApp, attempt, maxAttempts, retrySleepMs
+    maxAttempts = 3
+    retrySleepMs = 500
+    
+    LogMessage "SONDA: OpenAccessCanonical llamada con:"
+    LogMessage "SONDA: - dbPath: '" & dbPath & "'"
+    LogMessage "SONDA: - password: '" & password & "'"
+    LogMessage "SONDA: - Longitud password: " & Len(password)
     
     LogVerbose "Abriendo Access: " & dbPath
-    
-    Dim objApp
-    Set objApp = CreateObject("Access.Application")
-    
-    If Err.Number <> 0 Then
-        LogMessage "ERROR: No se pudo crear instancia de Access: " & Err.Description
-        Set OpenAccessCanonical = Nothing
-        Exit Function
+    If password <> "" Then
+        LogVerbose "Con password: (oculta)"
     End If
     
-    ' Configurar Access para modo silencioso
+    ' Cerrar cualquier instancia previa de Access
+    LogVerbose "Cerrando instancias previas de Access..."
+    CloseAllAccessInstances()
+    
+    ' Crear instancia de Access con reintentos
+    For attempt = 1 To maxAttempts
+        On Error Resume Next
+        Set objApp = CreateObject("Access.Application")
+        
+        If Err.Number <> 0 Then
+            LogMessage "ERROR: No se pudo crear instancia de Access (intento " & attempt & "): " & Err.Description
+            If attempt < maxAttempts Then
+                LogVerbose "Reintentando en " & retrySleepMs & "ms..."
+                WScript.Sleep retrySleepMs
+                Err.Clear
+            Else
+                Set OpenAccessCanonical = Nothing
+                Exit Function
+            End If
+        Else
+            Exit For
+        End If
+    Next
+    
+    ' Configurar Access para modo silencioso (solo lo que NO requiere BD abierta)
     objApp.Visible = False
     objApp.UserControl = False
-    objApp.AutomationSecurity = 1  ' msoAutomationSecurityForceDisable
+    objApp.AutomationSecurity = 3  ' msoAutomationSecurityForceDisable (3 = ForceDisable)
     
-    ' Abrir la base de datos
-    If password <> "" Then
-        objApp.OpenCurrentDatabase dbPath, False, password
-    Else
-        objApp.OpenCurrentDatabase dbPath, False
-    End If
+    ' Abrir la base de datos con reintentos
+    For attempt = 1 To maxAttempts
+        On Error Resume Next
+        LogMessage "SONDA: Intento " & attempt & " de abrir BD con password: '" & password & "'"
+        If password <> "" Then
+            LogMessage "SONDA: Llamando OpenCurrentDatabase con contraseña"
+            objApp.OpenCurrentDatabase dbPath, False, password
+        Else
+            LogMessage "SONDA: Llamando OpenCurrentDatabase sin contraseña"
+            objApp.OpenCurrentDatabase dbPath, False
+        End If
 
-    If Err.Number <> 0 Then
-        LogMessage "ERROR: No se pudo abrir la base de datos: " & Err.Description
-        objApp.Quit
-        Set objApp = Nothing
-        Set OpenAccessCanonical = Nothing
-        Exit Function
-    End If
-    
-    ' Configuraciones adicionales después de abrir la BD
-    objApp.DoCmd.SetWarnings False
-    objApp.Application.SetOption "Confirm Action Queries", False
-    objApp.Application.SetOption "Confirm Document Deletions", False
-    objApp.Application.SetOption "Confirm Record Changes", False
-    objApp.Application.SetOption "Show Status Bar", False
-    objApp.Application.SetOption "Show Animations", False
-    objApp.Application.SetOption "Default Open Mode for Databases", 1
-    objApp.Application.SetOption "Default Record Locking", 0
-    On Error GoTo 0
+        If Err.Number <> 0 Then
+            LogMessage "ERROR: No se pudo abrir la base de datos (intento " & attempt & "): " & Err.Description
+            If attempt < maxAttempts Then
+                LogVerbose "Reintentando en " & retrySleepMs & "ms..."
+                WScript.Sleep retrySleepMs
+                Err.Clear
+            Else
+                objApp.Quit
+                Set objApp = Nothing
+                Set OpenAccessCanonical = Nothing
+                Exit Function
+            End If
+        Else
+            Exit For
+        End If
+    Next
     
     ' Verificar que la BD se abrió correctamente
     If objApp.CurrentProject Is Nothing Then
@@ -362,8 +398,32 @@ Function OpenAccessCanonical(dbPath, password)
         Exit Function
     End If
     
-    LogVerbose "Access abierto exitosamente"
+    ' Configurar modo silencioso DESPUÉS de abrir la BD
+    On Error Resume Next
+    objApp.DoCmd.SetWarnings False
+    objApp.Application.SetOption "Confirm Action Queries", False
+    objApp.Application.SetOption "Confirm Document Deletions", False
+    objApp.Application.SetOption "Confirm Record Changes", False
+    objApp.Application.SetOption "Show Status Bar", False
+    objApp.Application.SetOption "Show Animations", False
+    objApp.Application.SetOption "Default Open Mode for Databases", 1
+    objApp.Application.SetOption "Default Record Locking", 0
+    objApp.VBE.MainWindow.Visible = False
+    Err.Clear
+    On Error GoTo 0
+    
+    ' Verificar acceso al VBE para operaciones de módulos
+    If Not objApp.VBE Is Nothing Then
+        LogVerbose "Acceso VBE disponible"
+    Else
+        LogMessage "ADVERTENCIA: Acceso VBE no disponible - las operaciones de modulos pueden fallar"
+        LogMessage "SOLUCION: Habilite 'Confiar en el acceso al modelo de objetos de proyectos de VBA' en Access"
+    End If
+    
+    On Error GoTo 0
     Set OpenAccessCanonical = objApp
+    
+    LogVerbose "Access abierto exitosamente"
 End Function
 
 ' Función para abrir Access de forma segura
@@ -646,14 +706,14 @@ Sub ExtractTables(outputPath)
     LogMessage "Informacion de tablas guardada en: tables.json"
 End Sub
 
-Function ExtractFormControls(db, formName)
+Function ExtractFormControls(db, formName, password)
     Dim controlsDict, app, frm
     Set controlsDict = CreateObject("Scripting.Dictionary")
     
     On Error Resume Next
     
     ' Abrir Access y el formulario
-    Set app = OpenAccessCanonical(db.Name, gPassword)
+    Set app = OpenAccessCanonical(db.Name, password)
     
     app.DoCmd.OpenForm formName, acDesign, , , , acHidden
     
@@ -879,10 +939,12 @@ End Sub
 
 ' Función para resolver rutas relativas
 Function ResolvePath(path)
+    ' Si la ruta ya es absoluta, devolverla tal como está
     If objFSO.GetAbsolutePathName(path) = path Then
         ResolvePath = path
     Else
-        ResolvePath = gScriptDir & "\" & path
+        ' Si es relativa, resolverla desde el directorio actual de trabajo, no desde el directorio del script
+        ResolvePath = objFSO.GetAbsolutePathName(path)
     End If
 End Function
 
@@ -1475,7 +1537,7 @@ Function GetDatabaseModules()
 End Function
 
 ' Función para extraer modulos VBA desde Access hacia archivos fuente
-Function ExtractModulesToFiles(dbPath)
+Function ExtractModulesToFiles(dbPath, password)
     On Error Resume Next
     
     Dim config, srcPath, extensions, includeSubdirs, filePattern
@@ -1504,7 +1566,7 @@ Function ExtractModulesToFiles(dbPath)
     End If
     
     ' Abrir Access
-    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
+    Set objAccess = OpenAccessCanonical(dbPath, password)
     If objAccess Is Nothing Then
         LogMessage "Error: No se pudo abrir la base de datos para extraccion"
         Exit Function
@@ -1774,16 +1836,10 @@ Sub Main()
     gVerbose = False
     gQuiet = False
     gDryRun = False
-    gPassword = ""
     gOutputPath = gScriptDir & "\output"
     
     ' Cargar configuracion de modulos
     Set gConfig = LoadConfig(gConfigPath)
-    
-    ' Integrar configuración de base de datos desde cli.ini
-    If gConfig("DATABASE_Password") <> "" Then
-        gPassword = gConfig("DATABASE_Password")
-    End If
     
     g_ModulesSrcPath = gConfig("MODULES_SrcPath")
     g_ModulesExtensions = gConfig("MODULES_Extensions")
@@ -1832,9 +1888,14 @@ Sub Main()
             gDebug = True
             LogMessage "Modo debug activado"
         ElseIf LCase(objArgs(i)) = "--password" And i < objArgs.Count - 1 Then
-            ' Manejar parámetro --password
-            gPassword = objArgs(i + 1)
-            LogMessage "Contraseña especificada por parámetro"
+            ' Manejar parámetro --password - NO consumir aquí, dejar que lo procese cada comando
+            ' Solo agregarlo a cleanArgs para que cada comando lo procese
+            ReDim Preserve cleanArgs(cleanArgCount)
+            cleanArgs(cleanArgCount) = objArgs(i)
+            cleanArgCount = cleanArgCount + 1
+            ReDim Preserve cleanArgs(cleanArgCount)
+            cleanArgs(cleanArgCount) = objArgs(i + 1)
+            cleanArgCount = cleanArgCount + 1
             i = i + 1  ' Saltar el siguiente argumento (valor de la contraseña)
         Else
             ' Es un argumento normal, no un modificador
@@ -1856,20 +1917,41 @@ Sub Main()
     
     Select Case LCase(command)
         Case "extract-modules"
+            ' Procesar argumentos del comando extract-modules
+            Dim dbArg, passwordOpt
+            dbArg = ""
+            passwordOpt = ""
+            
+            ' Procesar argumentos específicos del comando
+            For k = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k))
+                    Case "--password":
+                        If k < cleanArgCount - 1 Then 
+                            passwordOpt = cleanArgs(k+1)
+                            LogMessage "SONDA: Contraseña detectada en argumentos: '" & passwordOpt & "'"
+                            k = k + 1
+                        Else
+                            LogMessage "SONDA: Flag --password encontrado pero sin valor"
+                        End If
+                    Case Else
+                        If dbArg = "" Then dbArg = cleanArgs(k)
+                End Select
+            Next
+            
             ' Si no se especifica ruta, usar DefaultPath del config
-            If cleanArgCount >= 2 Then
-                gDbPath = ResolvePath(cleanArgs(1))
-            Else
+            If dbArg = "" Then
                 ' Usar DefaultPath de la configuración
                 Dim config
                 Set config = LoadConfig(gConfigPath)
                 gDbPath = ResolvePath(config("DATABASE_DefaultPath"))
                 LogMessage "Usando base de datos por defecto: " & gDbPath
+            Else
+                gDbPath = ResolvePath(dbArg)
             End If
             
             If Not gDryRun Then
                 If gVerbose Then WScript.Echo "Extrayendo modulos VBA desde Access..."
-                If Not ExtractModulesToFiles(gDbPath) Then
+                If Not ExtractModulesToFiles(gDbPath, passwordOpt) Then
                     WScript.Echo "Error: No se pudo completar la extraccion de modulos"
                     WScript.Quit 1
                 End If
@@ -1894,8 +1976,8 @@ Sub Main()
             
             If gVerbose Then WScript.Echo "Reconstruyendo modulos VBA..."
             
-            ' Abrir Access para RebuildProject
-            Set objAccess = OpenAccessCanonical(gDbPath, gPassword)
+            ' Abrir Access para RebuildProject (sin contraseña para rebuild)
+            Set objAccess = OpenAccessCanonical(gDbPath, "")
             If objAccess Is Nothing Then
                 WScript.Echo "Error: No se pudo abrir Access"
                 WScript.Quit 1
@@ -1939,9 +2021,9 @@ Sub Main()
                 If Not gDryRun Then
                     If gVerbose Then WScript.Echo "Ejecutando update de módulos específicos..."
                     
-                    ' Abrir Access para UpdateModules
+                    ' Abrir Access para UpdateModules (sin contraseña para update)
                     Dim objAccessUpdate
-                    Set objAccessUpdate = OpenAccessCanonical(gDbPath, gPassword)
+                    Set objAccessUpdate = OpenAccessCanonical(gDbPath, "")
                     If objAccessUpdate Is Nothing Then
                         WScript.Echo "Error: No se pudo abrir la base de datos"
                         WScript.Quit 1
@@ -1983,20 +2065,47 @@ Sub Main()
             End If
             
         Case "export-form"
-            If cleanArgCount >= 3 Then
-                gDbPath = ResolvePath(cleanArgs(1))
-                Dim formName, outputPath
-                formName = cleanArgs(2)
+            ' Procesar argumentos del comando export-form
+            Dim dbArg, formName, outputPath, passwordOpt
+            dbArg = ""
+            formName = ""
+            outputPath = ""
+            passwordOpt = ""
+            
+            ' Procesar argumentos específicos del comando
+            For k = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k))
+                    Case "--password":
+                        If k < cleanArgCount - 1 Then 
+                            passwordOpt = cleanArgs(k+1)
+                            LogMessage "SONDA: Contraseña detectada en argumentos: '" & passwordOpt & "'"
+                            k = k + 1
+                        Else
+                            LogMessage "SONDA: Flag --password encontrado pero sin valor"
+                        End If
+                    Case Else
+                        If dbArg = "" Then 
+                            dbArg = cleanArgs(k)
+                        ElseIf formName = "" Then
+                            formName = cleanArgs(k)
+                        ElseIf outputPath = "" Then
+                            outputPath = cleanArgs(k)
+                        End If
+                End Select
+            Next
+            
+            If dbArg <> "" And formName <> "" Then
+                gDbPath = ResolvePath(dbArg)
                 
                 ' Si no se especifica ruta de salida, usar el nombre del formulario con extensión .json
-                If cleanArgCount >= 4 Then
-                    outputPath = ResolvePath(cleanArgs(3))
-                Else
+                If outputPath = "" Then
                     outputPath = objFSO.GetAbsolutePathName(formName & ".json")
+                Else
+                    outputPath = ResolvePath(outputPath)
                 End If
                 
                 If Not gDryRun Then
-                    ExportFormToJSON gDbPath, gPassword, formName, outputPath
+                    ExportFormToJSON gDbPath, passwordOpt, formName, outputPath
                 Else
                     LogMessage "SIMULACION: Exportaria formulario " & formName & " de " & gDbPath & " a " & outputPath
                 End If
@@ -2004,6 +2113,106 @@ Sub Main()
                 LogError "Faltan argumentos para export-form"
                 WScript.Echo "Uso: cscript cli.vbs export-form <database> <form_name> [output_file] --password <password>"
                 ShowHelp
+            End If
+            
+        Case "schema"
+            ' Parseo de opciones para el comando schema
+            Dim dbArg, tableOpt, outOpt, fmtOpt, passwordOpt, k
+            dbArg = ""
+            tableOpt = ""
+            outOpt = ""
+            fmtOpt = "json"
+            passwordOpt = ""
+            
+            ' Parsear argumentos posicionales y flags
+            For k = 1 To cleanArgCount - 1
+                Select Case LCase(cleanArgs(k))
+                    Case "--table": 
+                        If k < cleanArgCount - 1 Then 
+                            tableOpt = cleanArgs(k+1)
+                            k = k + 1
+                        End If
+                    Case "--out":   
+                        If k < cleanArgCount - 1 Then 
+                            outOpt = cleanArgs(k+1)
+                            k = k + 1
+                        End If
+                    Case "--format":
+                        If k < cleanArgCount - 1 Then 
+                            fmtOpt = LCase(cleanArgs(k+1))
+                            k = k + 1
+                        End If
+                    Case "--password":
+                        If k < cleanArgCount - 1 Then 
+                            passwordOpt = cleanArgs(k+1)
+                            LogMessage "SONDA: Contraseña detectada en argumentos: '" & passwordOpt & "'"
+                            k = k + 1
+                        Else
+                            LogMessage "SONDA: Flag --password encontrado pero sin valor"
+                        End If
+                    Case Else
+                        If dbArg = "" Then dbArg = cleanArgs(k)
+                End Select
+            Next
+            
+            ' Usar base de datos por defecto desde .ini si no se especifica
+            If dbArg = "" Then
+                If objConfig.Exists("DATABASE_DefaultPath") Then
+                    dbArg = objConfig("DATABASE_DefaultPath")
+                    LogMessage "Usando base de datos por defecto: " & dbArg
+                Else
+                    WScript.Echo "Error: No se especificó base de datos y no hay DATABASE_DefaultPath en cli.ini"
+                    WScript.Quit 1
+                End If
+            End If
+            
+            gDbPath = ResolvePath(dbArg)
+            
+            ' Validar que el archivo existe
+            If Not objFSO.FileExists(gDbPath) Then
+                WScript.Echo "Error: El archivo de base de datos no existe: " & gDbPath
+                WScript.Quit 1
+            End If
+            
+            ' Configurar directorio de salida por defecto
+            If outOpt = "" Then 
+                Dim dbName: dbName = objFSO.GetBaseName(gDbPath)
+                outOpt = gScriptDir & "\output\schema\" & dbName
+            End If
+            
+            ' Crear directorio de salida
+            CreateFolderRecursive outOpt
+            
+            ' Validar formato
+            If fmtOpt <> "json" And fmtOpt <> "md" Then 
+                fmtOpt = "json"
+            End If
+            
+            ' Usar contraseña del parámetro directamente
+            If passwordOpt <> "" Then
+                LogMessage "Contraseña especificada por parámetro"
+            End If
+
+            If Not gDryRun Then
+                LogMessage "Exportando esquema de " & gDbPath & " a " & outOpt & " (formato: " & fmtOpt & ")"
+                If tableOpt <> "" Then
+                    LogMessage "Tabla específica: " & tableOpt
+                Else
+                    LogMessage "Exportando todas las tablas"
+                End If
+                
+                If Not ExportSchema(gDbPath, tableOpt, outOpt, fmtOpt, passwordOpt) Then
+                    WScript.Echo "Error: no se pudo exportar el esquema"
+                    WScript.Quit 1
+                End If
+                LogMessage "Esquema exportado exitosamente a " & outOpt
+            Else
+                LogMessage "SIMULACION: Exportaria esquema de " & gDbPath & " a " & outOpt & " (formato: " & fmtOpt & ")"
+                If tableOpt <> "" Then
+                    LogMessage "SIMULACION: Tabla específica: " & tableOpt
+                Else
+                    LogMessage "SIMULACION: Exportando todas las tablas"
+                End If
             End If
             
         Case "test"
@@ -2163,7 +2372,7 @@ End Function
 Sub ListObjects(dbPath)
     LogMessage "Listando objetos de: " & objFSO.GetFileName(dbPath)
     
-    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
+    Set objAccess = OpenAccessCanonical(dbPath, "")
     If objAccess Is Nothing Then
         Exit Sub
     End If
@@ -2328,8 +2537,8 @@ Function TestAccessAutomation()
         Exit Function
     End If
     
-    ' Intentar crear instancia de Access
-    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
+    ' Intentar crear instancia de Access (sin contraseña para tests)
+    Set objAccess = OpenAccessCanonical(dbPath, "")
     If Err.Number <> 0 Or objAccess Is Nothing Then
         TestAccessAutomation = False
         Exit Function
@@ -2365,8 +2574,8 @@ Function TestVBEAccess()
         Exit Function
     End If
     
-    ' Intentar crear instancia de Access
-    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
+    ' Intentar crear instancia de Access (sin contraseña para tests)
+    Set objAccess = OpenAccessCanonical(dbPath, "")
     If Err.Number <> 0 Or objAccess Is Nothing Then
         TestVBEAccess = False
         Exit Function
@@ -3079,7 +3288,7 @@ Sub ExportFormToJSON(dbPath, password, formName, outputPath)
     
     ' Extraer controles del formulario
     Dim jsonContent
-    jsonContent = ExtractFormControls(objApp, formName)
+    jsonContent = ExtractFormControls(objApp, formName, password)
     
     If jsonContent = "" Then
         LogMessage "Error: No se pudieron extraer los controles del formulario"
@@ -3519,6 +3728,272 @@ Function ImportFormFromJson_Finalize()
 End Function
 
 ' ============================================================================
+' SECCIÓN 7: FUNCIONES DE ESQUEMA DE BASE DE DATOS
+' ============================================================================
+
+' Exporta estructura de todas las tablas o una tabla específica
+Function ExportSchema(dbPath, tableFilter, outDir, fmt, password)
+    On Error Resume Next
+    ExportSchema = False
+
+    LogMessage "SONDA: ExportSchema llamada con parámetros:"
+    LogMessage "SONDA: - dbPath: '" & dbPath & "'"
+    LogMessage "SONDA: - password: '" & password & "'"
+    
+    LogVerbose "ExportSchema: Iniciando con dbPath=" & dbPath & ", password=" & password
+    LogMessage "DEBUG: Llamando a OpenAccessCanonical..."
+    
+    ' Usar el patrón Access singleton
+    Set objAccess = OpenAccessCanonical(dbPath, password)
+    LogMessage "DEBUG: OpenAccessCanonical retornó: " & TypeName(objAccess)
+    
+    If objAccess Is Nothing Then 
+        LogMessage "Error: No se pudo abrir la base de datos: " & dbPath
+        Exit Function
+    End If
+
+    Dim db: Set db = objAccess.CurrentDb
+    If db Is Nothing Then
+        LogMessage "Error: No se pudo acceder a CurrentDb"
+        CloseAccessCanonical objAccess
+        Exit Function
+    End If
+    
+    Dim schema, tdef, rel
+    Set schema = CreateObject("Scripting.Dictionary")
+
+    ' Índices de relaciones por tabla (FK entrantes/salientes)
+    Dim relsOut, relsIn
+    Set relsOut = CreateObject("Scripting.Dictionary")
+    Set relsIn  = CreateObject("Scripting.Dictionary")
+
+    ' Precalcular relaciones
+    For Each rel In db.Relations
+        If Left(rel.Table,4) <> "MSys" And Left(rel.ForeignTable,4) <> "MSys" Then
+            Dim rf, arr, i
+            ' salientes desde rel.Table
+            If Not relsOut.Exists(rel.Table) Then relsOut(rel.Table) = Array()
+            arr = relsOut(rel.Table)
+            ReDim Preserve arr(UBound(arr)+1)
+            Set arr(UBound(arr)) = rel
+            relsOut(rel.Table) = arr
+            ' entrantes hacia rel.ForeignTable
+            If Not relsIn.Exists(rel.ForeignTable) Then relsIn(rel.ForeignTable) = Array()
+            arr = relsIn(rel.ForeignTable)
+            ReDim Preserve arr(UBound(arr)+1)
+            Set arr(UBound(arr)) = rel
+            relsIn(rel.ForeignTable) = arr
+        End If
+    Next
+
+    ' Recorre tablas
+    For Each tdef In db.TableDefs
+        If Left(tdef.Name,4) <> "MSys" Then
+            If (tableFilter = "") Or (StrComp(tdef.Name, tableFilter, vbTextCompare) = 0) Then
+                Dim tinfo: Set tinfo = CreateObject("Scripting.Dictionary")
+                tinfo("name") = tdef.Name
+                tinfo("dateCreated") = tdef.DateCreated
+                tinfo("lastUpdated") = tdef.LastUpdated
+
+                ' Campos
+                Dim f, fields: Set fields = CreateObject("Scripting.Dictionary")
+                For Each f In tdef.Fields
+                    Dim finfo: Set finfo = CreateObject("Scripting.Dictionary")
+                    finfo("name") = f.Name
+                    finfo("type") = GetFieldTypeName(f.Type)
+                    finfo("size") = f.Size
+                    finfo("required") = f.Required
+                    finfo("allowZeroLength") = f.AllowZeroLength
+                    On Error Resume Next
+                    finfo("defaultValue") = f.DefaultValue
+                    finfo("validationRule") = f.ValidationRule
+                    finfo("validationText") = f.ValidationText
+                    On Error GoTo 0
+                    Set fields(f.Name) = finfo
+                    If gVerbose Then LogMessage "Campo agregado: " & f.Name & " (" & GetFieldTypeName(f.Type) & ")"
+                Next
+                Set tinfo("fields") = fields
+                If gVerbose Then LogMessage "Total campos en " & tdef.Name & ": " & fields.Count
+
+                ' Índices y PK
+                Dim idx, indexes: Set indexes = CreateObject("Scripting.Dictionary")
+                Dim pkCols: pkCols = ""
+                For Each idx In tdef.Indexes
+                    Dim idic: Set idic = CreateObject("Scripting.Dictionary")
+                    idic("name") = idx.Name
+                    idic("primary") = idx.Primary
+                    idic("unique") = idx.Unique
+                    ' columnas del índice
+                    Dim c, cols: cols = ""
+                    For Each c In idx.Fields
+                        If cols <> "" Then cols = cols & ", "
+                        cols = cols & c.Name
+                    Next
+                    idic("columns") = cols
+                    Set indexes(idx.Name) = idic
+                    If idx.Primary Then pkCols = cols
+                Next
+                Set tinfo("indexes") = indexes
+                tinfo("primaryKey") = pkCols
+
+                ' Relaciones (FK salientes y entrantes)
+                tinfo("relationsOut") = DescribeRelationsArray(relsOut, tdef.Name)
+                tinfo("relationsIn")  = DescribeRelationsArray(relsIn,  tdef.Name)
+
+                Set schema(tdef.Name) = tinfo
+            End If
+        End If
+    Next
+
+    ' Salida
+    Dim outFile
+    If tableFilter = "" Then
+        outFile = outDir & "\schema_all." & fmt
+    Else
+        outFile = outDir & "\schema_" & tableFilter & "." & fmt
+    End If
+
+    If LCase(fmt) = "md" Then
+        SaveSchemaAsMarkdown schema, outFile
+    Else
+        SaveToJSON schema, outFile
+    End If
+
+    ' SIEMPRE cerrar Access usando el patrón singleton
+    CloseAccessCanonical objAccess
+    
+    If Err.Number <> 0 Then
+        LogMessage "Error durante exportación de esquema: " & Err.Description
+        Err.Clear
+        ExportSchema = False
+    Else
+        ExportSchema = True
+    End If
+End Function
+
+' Convierte listado de relaciones a matriz de diccionarios
+Function DescribeRelationsArray(relIndex, tableName)
+    On Error Resume Next
+    Dim arr, i, out(), count: count = 0
+    If relIndex.Exists(tableName) Then
+        arr = relIndex(tableName)
+        ReDim out(UBound(arr))
+        For i = 0 To UBound(arr)
+            Dim d: Set d = CreateObject("Scripting.Dictionary")
+            d("name") = arr(i).Name
+            d("table") = arr(i).Table
+            d("foreignTable") = arr(i).ForeignTable
+            ' pares campo->campo
+            Dim rf, pairs: pairs = ""
+            For Each rf In arr(i).Fields
+                If pairs <> "" Then pairs = pairs & ", "
+                pairs = pairs & rf.Name & " -> " & rf.ForeignName
+            Next
+            d("fieldPairs") = pairs
+            Set out(count) = d
+            count = count + 1
+        Next
+        If count > 0 Then
+            ReDim Preserve out(count-1)
+            DescribeRelationsArray = out
+            Exit Function
+        End If
+    End If
+    DescribeRelationsArray = Array()
+End Function
+
+' Función para guardar esquema en formato Markdown
+Sub SaveSchemaAsMarkdown(schema, filePath)
+    On Error Resume Next
+    Dim s, tName, tinfo, fName, finfo, i, rel, fields, fieldKeys
+
+    s = "# Esquema de base de datos" & vbCrLf & vbCrLf
+
+    For Each tName In schema.Keys
+        Set tinfo = schema(tName)
+        s = s & "## Tabla: " & tName & vbCrLf
+        If tinfo.Exists("primaryKey") And tinfo("primaryKey") <> "" Then
+            s = s & "- **PK:** " & tinfo("primaryKey") & vbCrLf
+        End If
+        s = s & vbCrLf & "| Campo | Tipo | Tamano | Requerido | Defecto |" & vbCrLf
+        s = s & "|---|---|---:|:---:|---|" & vbCrLf
+
+        If tinfo.Exists("fields") Then
+            Set fields = tinfo("fields")
+            If gVerbose Then LogMessage "Procesando campos de " & tName & ", total: " & fields.Count
+            If fields.Count > 0 Then
+                fieldKeys = fields.Keys
+                If gVerbose Then LogMessage "Claves de campos obtenidas: " & UBound(fieldKeys) + 1
+                For i = 0 To UBound(fieldKeys)
+                    fName = fieldKeys(i)
+                    Set finfo = fields(fName)
+                    If gVerbose Then LogMessage "Procesando campo: " & fName & " - Tipo objeto: " & TypeName(finfo)
+                    
+                    Dim fieldType, fieldSize, fieldRequired
+                    fieldType = ""
+                    fieldSize = ""
+                    fieldRequired = False
+                    
+                    On Error Resume Next
+                    fieldType = finfo("type")
+                    fieldSize = finfo("size")
+                    fieldRequired = finfo("required")
+                    On Error GoTo 0
+                    
+                    If gVerbose Then LogMessage "Valores obtenidos - Tipo: " & fieldType & ", Tamaño: " & fieldSize & ", Requerido: " & fieldRequired
+                    
+                    Dim defVal: defVal = ""
+                     If finfo.Exists("defaultValue") Then defVal = finfo("defaultValue")
+                     Dim requiredText: requiredText = "No"
+                     If fieldRequired Then requiredText = "Si"
+                     Dim rowText: rowText = "| " & fName & " | " & fieldType & " | " & fieldSize & " | " & requiredText & " | " & defVal & " |" & vbCrLf
+                    s = s & rowText
+                    If gVerbose Then LogMessage "Fila agregada: " & Trim(Replace(rowText, vbCrLf, ""))
+                    If gVerbose Then LogMessage "Campo procesado: " & fName
+                Next
+            Else
+                If gVerbose Then LogMessage "No hay campos en el diccionario para " & tName
+            End If
+        Else
+            If gVerbose Then LogMessage "No hay campos para " & tName
+        End If
+
+        ' Relaciones salientes/entrantes
+        s = s & vbCrLf & "**FK (salientes):**" & vbCrLf
+        If IsArray(tinfo("relationsOut")) And UBound(tinfo("relationsOut")) >= 0 Then
+            For i = 0 To UBound(tinfo("relationsOut"))
+                Set rel = tinfo("relationsOut")(i)
+                s = s & "- " & rel("name") & ": " & tName & " → " & rel("foreignTable") & " (" & rel("fieldPairs") & ")" & vbCrLf
+            Next
+        Else
+            s = s & "- (ninguna)" & vbCrLf
+        End If
+
+        s = s & vbCrLf & "**Referenciada por (entrantes):**" & vbCrLf
+        If IsArray(tinfo("relationsIn")) And UBound(tinfo("relationsIn")) >= 0 Then
+            For i = 0 To UBound(tinfo("relationsIn"))
+                Set rel = tinfo("relationsIn")(i)
+                s = s & "- " & rel("name") & ": " & rel("table") & " → " & tName & " (" & rel("fieldPairs") & ")" & vbCrLf
+            Next
+        Else
+            s = s & "- (ninguna)" & vbCrLf
+        End If
+
+        s = s & vbCrLf
+    Next
+    
+    If gVerbose Then LogMessage "Contenido final del Markdown (primeros 500 caracteres): " & Left(s, 500)
+
+    Dim ts: Set ts = CreateObject("ADODB.Stream")
+    ts.Type = 2: ts.Charset = "utf-8": ts.Open
+    ts.WriteText s, 0
+    ts.SaveToFile filePath, 2
+    ts.Close
+    
+    If gVerbose Then LogMessage "Archivo Markdown guardado: " & filePath & " (longitud: " & Len(s) & " caracteres)"
+End Sub
+
+' ============================================================================
 ' FUNCIONES AUXILIARES
 ' ============================================================================
 
@@ -3577,6 +4052,25 @@ Function ReadAllText(filePath)
     If Err.Number <> 0 Then ReadAllText = ""
     Err.Clear
 End Function
+
+' Función para cerrar todas las instancias de Access
+Sub CloseAllAccessInstances()
+    On Error Resume Next
+    
+    Dim objWMI, colProcesses, objProcess
+    Set objWMI = GetObject("winmgmts:\\.\root\cimv2")
+    Set colProcesses = objWMI.ExecQuery("SELECT * FROM Win32_Process WHERE Name = 'MSACCESS.EXE'")
+    
+    For Each objProcess In colProcesses
+        LogVerbose "Cerrando proceso Access PID: " & objProcess.ProcessId
+        objProcess.Terminate()
+    Next
+    
+    ' Esperar un momento para que los procesos se cierren
+    WScript.Sleep 1000
+    
+    Err.Clear
+End Sub
 
 Function JsonParse(jsonText)
     On Error Resume Next
