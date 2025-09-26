@@ -57,7 +57,7 @@ Const acPage = 124
 ' SECCIÓN 2: VARIABLES GLOBALES
 ' ============================================================================
 
-Dim objFSO, objArgs, objAccess, objConfig
+Dim objFSO, objArgs, objConfig
 Dim gVerbose, gQuiet, gDryRun, gDebug
 Dim gDbPath, gPassword, gOutputPath, gConfigPath, gScriptPath, gScriptDir
 Dim g_ModulesSrcPath, g_ModulesExtensions, g_ModulesIncludeSubdirs
@@ -103,11 +103,11 @@ Function LoadConfig(configPath)
     config.Add "MODULES_FilePattern", "*"
     
     If Not fso.FileExists(configPath) Then
-        LogMessage "Archivo de configuracion no encontrado: " & configPath & ". Usando valores por defecto."
+        ' LogMessage "Archivo de configuracion no encontrado: " & configPath & ". Usando valores por defecto."
         Set LoadConfig = config
         Exit Function
     Else
-        LogMessage "Archivo de configuracion encontrado: " & configPath
+        ' LogMessage "Archivo de configuracion encontrado: " & configPath
     End If
     
     Set file = fso.OpenTextFile(configPath, 1)
@@ -129,22 +129,22 @@ Function LoadConfig(configPath)
                         key = section & "_" & Trim(parts(0))
                         value = Trim(parts(1))
                         
-                        LogMessage "Procesando: [" & section & "] " & Trim(parts(0)) & " = " & value & " -> clave: " & key
+                        ' LogMessage "Procesando: [" & section & "] " & Trim(parts(0)) & " = " & value & " -> clave: " & key
                         
                         ' Resolver rutas relativas para ciertos valores (excepto patrones)
                         If (InStr(UCase(key), "PATH") > 0 Or InStr(UCase(key), "FILE") > 0) And InStr(UCase(key), "PATTERN") = 0 Then
                             If value <> "" And fso.GetAbsolutePathName(value) <> value Then
                                 value = gScriptDir & "\" & value
-                                LogMessage "Ruta resuelta: " & value
+                                ' LogMessage "Ruta resuelta: " & value
                             End If
                         End If
                         
                         If config.Exists(key) Then
                             config(key) = value
-                            LogMessage "Clave actualizada: " & key & " = " & value
+                            ' LogMessage "Clave actualizada: " & key & " = " & value
                         Else
                             config.Add key, value
-                            LogMessage "Clave agregada: " & key & " = " & value
+                            ' LogMessage "Clave agregada: " & key & " = " & value
                         End If
                     End If
                 End If
@@ -156,7 +156,7 @@ Function LoadConfig(configPath)
     Set LoadConfig = config
     
     If Err.Number <> 0 Then
-        LogMessage "Error cargando configuracion: " & Err.Description
+        ' LogMessage "Error cargando configuracion: " & Err.Description
         Err.Clear
     End If
 End Function
@@ -284,13 +284,15 @@ End Sub
 
 ' Función para cerrar procesos de Access existentes antes de comenzar
 Sub CloseExistingAccessProcesses()
-    Dim pids, i
+    Dim pids, i, processCount
     
     LogVerbose "Verificando procesos de Access existentes..."
     pids = GetAccessPIDs()
     
+    ' Verificar si hay procesos reales (array no vacío)
     If IsArray(pids) And UBound(pids) >= 0 Then
-        LogMessage "Cerrando " & (UBound(pids) + 1) & " proceso(s) de Access existente(s)..."
+        processCount = UBound(pids) + 1
+        LogMessage "Cerrando " & processCount & " proceso(s) de Access existente(s)..."
         For i = 0 To UBound(pids)
             TerminateAccessPID pids(i)
         Next
@@ -298,10 +300,71 @@ Sub CloseExistingAccessProcesses()
         ' Esperar un momento para que los procesos se cierren
         WScript.Sleep 1000
         LogVerbose "Procesos de Access cerrados"
-    Else
-        LogVerbose "No hay procesos de Access ejecutandose"
     End If
 End Sub
+
+' Función singleton para obtener la instancia de Access
+' ===========================================================================
+' Función canónica para abrir Access - NO usa singleton, retorna instancia directa
+' Cada llamada crea una nueva instancia independiente
+' ===========================================================================
+Function OpenAccessCanonical(dbPath, password)
+    On Error Resume Next
+    
+    LogVerbose "Abriendo Access: " & dbPath
+    
+    Dim objApp
+    Set objApp = CreateObject("Access.Application")
+    
+    If Err.Number <> 0 Then
+        LogMessage "ERROR: No se pudo crear instancia de Access: " & Err.Description
+        Set OpenAccessCanonical = Nothing
+        Exit Function
+    End If
+    
+    ' Configurar Access para modo silencioso
+    objApp.Visible = False
+    objApp.UserControl = False
+    objApp.AutomationSecurity = 1  ' msoAutomationSecurityForceDisable
+    
+    ' Abrir la base de datos
+    If password <> "" Then
+        objApp.OpenCurrentDatabase dbPath, False, password
+    Else
+        objApp.OpenCurrentDatabase dbPath, False
+    End If
+
+    If Err.Number <> 0 Then
+        LogMessage "ERROR: No se pudo abrir la base de datos: " & Err.Description
+        objApp.Quit
+        Set objApp = Nothing
+        Set OpenAccessCanonical = Nothing
+        Exit Function
+    End If
+    
+    ' Configuraciones adicionales después de abrir la BD
+    objApp.DoCmd.SetWarnings False
+    objApp.Application.SetOption "Confirm Action Queries", False
+    objApp.Application.SetOption "Confirm Document Deletions", False
+    objApp.Application.SetOption "Confirm Record Changes", False
+    objApp.Application.SetOption "Show Status Bar", False
+    objApp.Application.SetOption "Show Animations", False
+    objApp.Application.SetOption "Default Open Mode for Databases", 1
+    objApp.Application.SetOption "Default Record Locking", 0
+    On Error GoTo 0
+    
+    ' Verificar que la BD se abrió correctamente
+    If objApp.CurrentProject Is Nothing Then
+        LogMessage "ERROR: No se pudo abrir la base de datos (CurrentProject = Nothing)"
+        objApp.Quit
+        Set objApp = Nothing
+        Set OpenAccessCanonical = Nothing
+        Exit Function
+    End If
+    
+    LogVerbose "Access abierto exitosamente"
+    Set OpenAccessCanonical = objApp
+End Function
 
 ' Función para abrir Access de forma segura
 ' Función canónica para abrir Access (basada en condor_cli.vbs)
@@ -391,21 +454,22 @@ Function OpenAccess(dbPath, password)
     LogVerbose "Access abierto exitosamente"
 End Function
 
-' Función canónica para cerrar Access de forma segura (basada en condor_cli.vbs)
+' ===========================================================================
+' Función canónica para cerrar Access de forma segura
 ' Implementa secuencia oficial de Microsoft para evitar procesos zombie
-Sub CloseAccess(objAccess)
+' ===========================================================================
+Sub CloseAccessCanonical(objAccess)
     If Not objAccess Is Nothing Then
         LogVerbose "Cerrando Access..."
         
         On Error Resume Next
-        ' Secuencia oficial Microsoft para cierre seguro (según lecciones aprendidas)
+        ' Secuencia oficial Microsoft para cierre seguro
         objAccess.Echo True
         objAccess.DoCmd.SetWarnings True
-        ' No restaurar AutomationSecurity - rebuild no lo restaura
         objAccess.CloseCurrentDatabase
-        objAccess.Quit acQuitSaveNone  ' Usar constante oficial en lugar de número
+        objAccess.Quit acQuitSaveNone
         
-        ' CRÍTICO: Cerrar CurrentDb DESPUÉS de Quit (según documentación oficial)
+        ' CRÍTICO: Cerrar CurrentDb DESPUÉS de Quit
         If Not objAccess.CurrentDb Is Nothing Then
             objAccess.CurrentDb.Close
         End If
@@ -417,6 +481,13 @@ Sub CloseAccess(objAccess)
         
         LogVerbose "Access cerrado exitosamente"
     End If
+End Sub
+
+' Función para cerrar la instancia singleton de Access - OBSOLETA
+' Esta función ya no es necesaria con el patrón explícito
+Sub CloseSingletonAccess()
+    ' Función obsoleta - usar CloseAccessCanonical directamente
+    LogVerbose "CloseSingletonAccess es obsoleta - usar CloseAccessCanonical"
 End Sub
 
 ' ============================================================================
@@ -582,13 +653,13 @@ Function ExtractFormControls(db, formName)
     On Error Resume Next
     
     ' Abrir Access y el formulario
-    Set app = OpenAccess(db.Name, gPassword)
+    Set app = OpenAccessCanonical(db.Name, gPassword)
     
     app.DoCmd.OpenForm formName, acDesign, , , , acHidden
     
     If Err.Number <> 0 Then
         LogMessage "Error: Formulario '" & formName & "' no encontrado o no se puede abrir", "ERROR"
-        CloseAccess app
+        CloseAccessCanonical app
         Set ExtractFormControls = controlsDict
         Exit Function
     End If
@@ -597,7 +668,7 @@ Function ExtractFormControls(db, formName)
     Set controlsDict = ExtractFormControlsInternal(frm)
     
     app.DoCmd.Close acForm, formName, acSaveNo
-    CloseAccess app
+    CloseAccessCanonical app
     
     Set ExtractFormControls = controlsDict
 End Function
@@ -1433,7 +1504,7 @@ Function ExtractModulesToFiles(dbPath)
     End If
     
     ' Abrir Access
-    Set objAccess = OpenAccess(dbPath, gPassword)
+    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
     If objAccess Is Nothing Then
         LogMessage "Error: No se pudo abrir la base de datos para extraccion"
         Exit Function
@@ -1447,7 +1518,7 @@ Function ExtractModulesToFiles(dbPath)
     If Err.Number <> 0 Or vbProject Is Nothing Then
         Err.Clear
         LogMessage "Error: No se pudo acceder al proyecto VBA"
-        CloseAccess objAccess
+        CloseAccessCanonical objAccess
         Exit Function
     End If
     
@@ -1455,7 +1526,7 @@ Function ExtractModulesToFiles(dbPath)
     If Err.Number <> 0 Or vbComponents Is Nothing Then
         Err.Clear
         LogMessage "Error: No se pudo acceder a los componentes VBA"
-        CloseAccess objAccess
+        CloseAccessCanonical objAccess
         Exit Function
     End If
     
@@ -1550,7 +1621,7 @@ ExtractReports:
     End If
     
     ' Cerrar Access
-    CloseAccess objAccess
+    CloseAccessCanonical objAccess
     
     If Err.Number <> 0 Then
         LogMessage "Error durante extraccion: " & Err.Description
@@ -1810,6 +1881,7 @@ Sub Main()
             
         Case "rebuild"
             ' El comando rebuild no acepta parámetros adicionales, siempre usa DefaultPath
+            Dim objAccess
             Set config = LoadConfig(gConfigPath)
             gDbPath = ResolvePath(config("DATABASE_DefaultPath"))
             LogMessage "Usando base de datos por defecto: " & gDbPath
@@ -1823,17 +1895,17 @@ Sub Main()
             If gVerbose Then WScript.Echo "Reconstruyendo modulos VBA..."
             
             ' Abrir Access para RebuildProject
-            Set objAccess = OpenAccess(gDbPath, gPassword)
+            Set objAccess = OpenAccessCanonical(gDbPath, gPassword)
             If objAccess Is Nothing Then
                 WScript.Echo "Error: No se pudo abrir Access"
                 WScript.Quit 1
             End If
             
-            ' Llamar a RebuildProject en lugar de RebuildModules
-            Call RebuildProject()
+            ' Llamar a RebuildProject con objAccess como parámetro
+            Call RebuildProject(objAccess)
             
             ' Cerrar Access
-            Call CloseAccess(objAccess)
+            Call CloseAccessCanonical(objAccess)
             WScript.Quit 0
             
         Case "update"
@@ -1866,8 +1938,22 @@ Sub Main()
                 
                 If Not gDryRun Then
                     If gVerbose Then WScript.Echo "Ejecutando update de módulos específicos..."
+                    
+                    ' Abrir Access para UpdateModules
+                    Dim objAccessUpdate
+                    Set objAccessUpdate = OpenAccessCanonical(gDbPath, gPassword)
+                    If objAccessUpdate Is Nothing Then
+                        WScript.Echo "Error: No se pudo abrir la base de datos"
+                        WScript.Quit 1
+                    End If
+                    
+                    ' Llamar a UpdateModules con objAccess como parámetro
                     Dim res
-                    res = UpdateModules(gDbPath, modulesArg)
+                    res = UpdateModules(objAccessUpdate, modulesArg)
+                    
+                    ' Cerrar Access
+                    CloseAccessCanonical objAccessUpdate
+                    
                     If Not res Then
                         WScript.Echo "Error: No se pudo completar el update de módulos"
                         WScript.Quit 1
@@ -2026,53 +2112,9 @@ Function NormalizeModuleList(moduleInput)
 End Function
 
 ' Función para actualizar módulos usando exactamente el mismo flujo que rebuild
-Function UpdateModules(dbPath, modulesArg)
+Function UpdateModules(objAccess, modulesArg)
     On Error Resume Next
     UpdateModules = False
-    
-    ' Crear Access directamente como en rebuild (no usar OpenAccess)
-    Dim app
-    Set app = CreateObject("Access.Application")
-    
-    If Err.Number <> 0 Then
-        LogMessage "update: Error al crear instancia de Access: " & Err.Description
-        UpdateModules = False
-        Exit Function
-    End If
-    
-    ' Configurar Access en modo silencioso ANTES de abrir BD (igual que rebuild)
-    app.Visible = False
-    app.UserControl = False
-    app.AutomationSecurity = 1  ' msoAutomationSecurityForceDisable
-    
-    ' Abrir base de datos
-    Dim strDbPassword
-    strDbPassword = GetDatabasePassword(dbPath)
-    
-    If strDbPassword = "" Then
-        app.OpenCurrentDatabase dbPath
-    Else
-        app.OpenCurrentDatabase dbPath, , strDbPassword
-    End If
-    
-    If Err.Number <> 0 Then
-        LogMessage "update: Error al abrir base de datos: " & Err.Description
-        app.Quit
-        Set app = Nothing
-        UpdateModules = False
-        Exit Function
-    End If
-    
-    ' Configuraciones adicionales después de abrir BD (igual que rebuild)
-    On Error Resume Next
-    app.Echo False
-    app.DoCmd.SetWarnings False
-    app.Application.SetOption "Confirm Action Queries", False
-    app.Application.SetOption "Confirm Document Deletions", False
-    app.Application.SetOption "Confirm Record Changes", False
-    app.VBE.MainWindow.Visible = False  ' Configuración faltante de rebuild
-    Err.Clear
-    On Error GoTo 0
     
     ' Normaliza la lista igual que rebuild; si rebuild ya tiene un normalizador, úsalo
     Dim list, i, name
@@ -2080,7 +2122,6 @@ Function UpdateModules(dbPath, modulesArg)
     
     If IsEmpty(list) Or UBound(list) < 0 Then
         LogMessage "update: sin módulos para actualizar"
-        CloseAccess app
         UpdateModules = True
         Exit Function
     End If
@@ -2094,7 +2135,7 @@ Function UpdateModules(dbPath, modulesArg)
         If name <> "" Then
             If gVerbose Then LogMessage "update: procesando " & name
             ' Reutiliza el mismo importador que usa rebuild para 1 módulo (no inventes otro)
-            Call RebuildLike_ImportOne(app, name)
+            Call RebuildLike_ImportOne(objAccess, name)
             If Err.Number <> 0 Then
                 LogMessage "update: error importando " & name & ": " & Err.Number & " - " & Err.Description
                 Err.Clear
@@ -2106,17 +2147,13 @@ Function UpdateModules(dbPath, modulesArg)
     
     ' Compilar/guardar IGUAL que rebuild
     On Error Resume Next
-    app.RunCommand acCmdCompileAndSaveAllModules
+    objAccess.RunCommand acCmdCompileAndSaveAllModules
     If Err.Number <> 0 Then
         LogMessage "update: aviso al compilar: " & Err.Description
         Err.Clear
         ' Fallback: no intentes ningún otro RunCommand; continúa al cierre
     End If
     On Error GoTo 0
-    
-    ' Cierre IGUAL que rebuild
-    app.Quit 1  ' acQuitSaveAll = 1
-    Set app = Nothing
     
     LogMessage "update: proceso completado exitosamente"
     UpdateModules = True
@@ -2126,7 +2163,7 @@ End Function
 Sub ListObjects(dbPath)
     LogMessage "Listando objetos de: " & objFSO.GetFileName(dbPath)
     
-    Set objAccess = OpenAccess(dbPath, gPassword)
+    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
     If objAccess Is Nothing Then
         Exit Sub
     End If
@@ -2157,7 +2194,7 @@ Sub ListObjects(dbPath)
         WScript.Echo "  " & mdl.Name
     Next
     
-    CloseAccess objAccess
+    CloseAccessCanonical objAccess
 End Sub
 
 
@@ -2292,14 +2329,14 @@ Function TestAccessAutomation()
     End If
     
     ' Intentar crear instancia de Access
-    Set objAccess = OpenAccess(dbPath, gPassword)
+    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
     If Err.Number <> 0 Or objAccess Is Nothing Then
         TestAccessAutomation = False
         Exit Function
     End If
     
     ' Cerrar y limpiar
-    CloseAccess objAccess
+    CloseAccessCanonical objAccess
     
     On Error GoTo 0
     TestAccessAutomation = True
@@ -2329,7 +2366,7 @@ Function TestVBEAccess()
     End If
     
     ' Intentar crear instancia de Access
-    Set objAccess = OpenAccess(dbPath, gPassword)
+    Set objAccess = OpenAccessCanonical(dbPath, gPassword)
     If Err.Number <> 0 Or objAccess Is Nothing Then
         TestVBEAccess = False
         Exit Function
@@ -2337,13 +2374,13 @@ Function TestVBEAccess()
     
     ' Probar acceso VBE usando CheckVBProjectAccess
     If Not CheckVBProjectAccess(objAccess) Then
-        CloseAccess objAccess
+        CloseAccessCanonical objAccess
         TestVBEAccess = False
         Exit Function
     End If
     
     ' Cerrar y limpiar
-    CloseAccess objAccess
+    CloseAccessCanonical objAccess
     
     On Error GoTo 0
     TestVBEAccess = True
@@ -2514,10 +2551,10 @@ Function CleanVBAFile(filePath, fileExtension)
 End Function
 
 ' Subrutina para importar módulos con codificación ANSI
-Sub ImportModuleWithAnsiEncoding(strImportPath, moduleName, fileExtension, vbComponent, cleanedContent)
+Sub ImportModuleWithAnsiEncoding(objAccess, strImportPath, moduleName, fileExtension, cleanedContent)
     On Error Resume Next
     
-    LogMessage "  Importando: " & moduleName & " desde " & strImportPath
+    ' LogMessage "  Importando: " & moduleName & " desde " & strImportPath
     
     ' Crear nuevo componente
     Dim newComponent, componentType
@@ -2528,8 +2565,8 @@ Sub ImportModuleWithAnsiEncoding(strImportPath, moduleName, fileExtension, vbCom
         componentType = 1  ' vbext_ct_StdModule
     End If
     
-    LogMessage "  Creando nuevo componente tipo " & componentType & " para: " & moduleName
-    Set newComponent = vbComponent.VBComponents.Add(componentType)
+    ' LogMessage "  Creando nuevo componente tipo " & componentType & " para: " & moduleName
+    Set newComponent = objAccess.VBE.ActiveVBProject.VBComponents.Add(componentType)
     
     ' Verificar que el componente se creó correctamente
     If newComponent Is Nothing Then
@@ -2542,7 +2579,7 @@ Sub ImportModuleWithAnsiEncoding(strImportPath, moduleName, fileExtension, vbCom
     ' Verificar si el componente ya existe
     Dim existingComponent
     Set existingComponent = Nothing
-    For Each existingComponent In vbComponent.VBComponents
+    For Each existingComponent In objAccess.VBE.ActiveVBProject.VBComponents
         If existingComponent.Name = moduleName Then
             Exit For
         End If
@@ -2551,7 +2588,7 @@ Sub ImportModuleWithAnsiEncoding(strImportPath, moduleName, fileExtension, vbCom
     
     ' Si existe, eliminar el código existente
     If Not existingComponent Is Nothing Then
-        LogMessage "  Limpiando código existente de: " & moduleName
+        ' LogMessage "  Limpiando código existente de: " & moduleName
         
         ' Limpiar solo si hay líneas
         If existingComponent.CodeModule.CountOfLines > 0 Then
@@ -2561,7 +2598,7 @@ Sub ImportModuleWithAnsiEncoding(strImportPath, moduleName, fileExtension, vbCom
         ' Insertar contenido limpio
         If Len(cleanedContent) > 0 Then
             existingComponent.CodeModule.AddFromString cleanedContent
-            LogMessage "  ✓ Actualizado: " & moduleName
+            ' LogMessage "  ✓ Actualizado: " & moduleName
         End If
     End If
     
@@ -2570,7 +2607,7 @@ Sub ImportModuleWithAnsiEncoding(strImportPath, moduleName, fileExtension, vbCom
         LogMessage "  ❌ Error crítico con " & moduleName & ": " & Err.Description
         Err.Clear
     Else
-        LogMessage "  ✓ Importación completada exitosamente para: " & moduleName
+        ' LogMessage "  ✓ Importación completada exitosamente para: " & moduleName
     End If
     
     On Error GoTo 0
@@ -2694,8 +2731,8 @@ Function RebuildLike_ImportOne(objAccess, moduleName)
     Dim fileExtension
     fileExtension = LCase(objFSO.GetExtensionName(filePath))
     
-    ' Log IDÉNTICO al de rebuild
-    LogMessage "Importando módulo " & moduleName & " desde " & filePath
+    ' Log simplificado - solo el nombre del módulo
+    LogMessage "Importando: " & moduleName
     
     ' 2) Validar sintaxis usando la misma función que rebuild
     Dim validationResult, errorDetails
@@ -2718,7 +2755,7 @@ Function RebuildLike_ImportOne(objAccess, moduleName)
     cleanedContent = CleanVBAFile(filePath, fileExtension)
     
     ' 5) Importar EXACTAMENTE como lo hace rebuild
-    Call ImportModuleWithAnsiEncoding(filePath, moduleName, fileExtension, objAccess.VBE.ActiveVBProject, cleanedContent)
+    Call ImportModuleWithAnsiEncoding(objAccess, filePath, moduleName, fileExtension, cleanedContent)
     
     ' 6) Verificar éxito según el mismo criterio que rebuild
     If Err.Number <> 0 Then
@@ -2742,7 +2779,7 @@ Function RebuildLike_ImportOne(objAccess, moduleName)
     Next
     
     RebuildLike_ImportOne = True
-    LogMessage "✓ Módulo " & moduleName & " importado exitosamente"
+    ' LogMessage "✓ Módulo " & moduleName & " importado exitosamente"
 End Function
 
 ' Función para determinar la contraseña de la base de datos
@@ -2760,25 +2797,15 @@ Function GetDatabasePassword(strDbPath)
 End Function
 
 ' Subrutina para reconstruir proyecto completo (basada en condor_cli.vbs)
-Sub RebuildProject()
-    WScript.Echo "=== RECONSTRUCCION COMPLETA DEL PROYECTO VBA ==="
-    WScript.Echo "ADVERTENCIA: Se eliminaran TODOS los modulos VBA existentes"
-    WScript.Echo "Iniciando proceso de reconstruccion..."
-    
-    ' Cerrar procesos de Access existentes antes de comenzar
-    CloseExistingAccessProcesses
-    
-    ' Abrir Access de forma segura
-    Set objAccess = OpenAccess(gDbPath, GetDatabasePassword(gDbPath))
-    If objAccess Is Nothing Then
-        WScript.Echo "❌ Error: No se pudo abrir Access"
-        WScript.Quit 1
-    End If
+Sub RebuildProject(objAccess)
+    ' WScript.Echo "=== RECONSTRUCCION COMPLETA DEL PROYECTO VBA ==="
+    ' WScript.Echo "ADVERTENCIA: Se eliminaran TODOS los modulos VBA existentes"
+    ' WScript.Echo "Iniciando proceso de reconstruccion..."
     
     On Error Resume Next
     
     ' Paso 1: Eliminar todos los módulos existentes
-    WScript.Echo "Paso 1: Eliminando todos los modulos VBA existentes..."
+    ' WScript.Echo "Paso 1: Eliminando todos los modulos VBA existentes..."
     
     Dim vbProject, vbComponent
     Set vbProject = objAccess.VBE.ActiveVBProject
@@ -2792,75 +2819,31 @@ Sub RebuildProject()
         
         ' Solo eliminar módulos estándar y de clase (no formularios ni informes)
         If vbComponent.Type = 1 Or vbComponent.Type = 2 Then ' vbext_ct_StdModule = 1, vbext_ct_ClassModule = 2
-            WScript.Echo "  Eliminando: " & vbComponent.Name & " (Tipo: " & vbComponent.Type & ")"
+            ' WScript.Echo "  Eliminando: " & vbComponent.Name & " (Tipo: " & vbComponent.Type & ")"
             vbProject.VBComponents.Remove vbComponent
             
             If Err.Number <> 0 Then
-                WScript.Echo "  ❌ Error eliminando " & vbComponent.Name & ": " & Err.Description
+                ' WScript.Echo "  ❌ Error eliminando " & vbComponent.Name & ": " & Err.Description
                 Err.Clear
             Else
-                WScript.Echo "  ✓ Eliminado: " & vbComponent.Name
+                ' WScript.Echo "  ✓ Eliminado: " & vbComponent.Name
             End If
         End If
     Next
     
-    WScript.Echo "Paso 2: Cerrando base de datos..."
-    
-    ' Cerrar sin guardar explícitamente para evitar confirmaciones
-    objAccess.Quit 1  ' acQuitSaveAll = 1
+    ' Paso 2: Guardar cambios sin cerrar Access
+    ' WScript.Echo "Paso 2: Guardando cambios..."
+    objAccess.DoCmd.Save
     
     If Err.Number <> 0 Then
-        WScript.Echo "Advertencia al cerrar Access: " & Err.Description
+        ' WScript.Echo "Advertencia al guardar: " & Err.Description
         Err.Clear
     End If
     
-    Set objAccess = Nothing
-    WScript.Echo "✓ Base de datos cerrada y guardada"
+    ' WScript.Echo "✓ Módulos eliminados y cambios guardados"
     
-    ' Paso 3: Volver a abrir la base de datos
-    WScript.Echo "Paso 3: Reabriendo base de datos con proyecto VBA limpio..."
-    
-    Set objAccess = CreateObject("Access.Application")
-    
-    If Err.Number <> 0 Then
-        WScript.Echo "❌ Error al crear nueva instancia de Access: " & Err.Description
-        WScript.Quit 1
-    End If
-    
-    ' Configurar Access en modo silencioso
-    objAccess.Visible = False
-    objAccess.UserControl = False
-    
-    ' Suprimir alertas y diálogos de confirmación
-    On Error Resume Next
-    ' objAccess.DoCmd.SetWarnings False  ' Comentado temporalmente por error de compilación
-    objAccess.Application.Echo False
-    ' Configuraciones adicionales para suprimir diálogos
-    objAccess.Application.AutomationSecurity = 1  ' msoAutomationSecurityLow
-    objAccess.VBE.MainWindow.Visible = False
-    Err.Clear
-    On Error GoTo 0
-    
-    ' Determinar contraseña para la base de datos
-    Dim strDbPassword
-    strDbPassword = GetDatabasePassword(gDbPath)
-    
-    ' Abrir base de datos
-    If strDbPassword = "" Then
-        objAccess.OpenCurrentDatabase gDbPath
-    Else
-        objAccess.OpenCurrentDatabase gDbPath, , strDbPassword
-    End If
-    
-    If Err.Number <> 0 Then
-        LogMessage "Error al reabrir base de datos: " & Err.Description
-        WScript.Quit 1
-    End If
-    
-    WScript.Echo "✓ Base de datos reabierta con proyecto VBA limpio"
-    
-    ' Paso 4: Importar todos los módulos de nuevo
-    WScript.Echo "Paso 4: Importando todos los modulos desde /src..."
+    ' Paso 3: Importar todos los módulos de nuevo
+    ' WScript.Echo "Paso 3: Importando todos los modulos desde /src..."
     
     ' Integrar lógica de importación directamente
     Dim objFolder, objFile
@@ -2876,8 +2859,8 @@ Sub RebuildProject()
         WScript.Quit 1
     End If
     
-    ' PASO 4.1: Validacion previa de sintaxis
-    LogMessage "Validando sintaxis de todos los modulos..."
+    ' PASO 3.1: Validacion previa de sintaxis
+    ' LogMessage "Validando sintaxis de todos los modulos..."
     Set objFolder = objFSO.GetFolder(g_ModulesSrcPath)
     totalFiles = 0
     validFiles = 0
@@ -2890,7 +2873,7 @@ Sub RebuildProject()
             
             If validationResult = True Then
                 validFiles = validFiles + 1
-                LogMessage "  Sintaxis valida: " & objFile.Name
+                ' LogMessage "  Sintaxis valida: " & objFile.Name
             Else
                 invalidFiles = invalidFiles + 1
                 LogMessage "  ERROR en " & objFile.Name & ": " & errorDetails
@@ -2905,56 +2888,56 @@ Sub RebuildProject()
         WScript.Quit 1
     End If
     
-    LogMessage "Validacion completada: " & validFiles & " archivos validos"
+    ' LogMessage "Validacion completada: " & validFiles & " archivos validos"
     
-    ' PASO 4.2: Procesar archivos de modulos
+    ' PASO 3.2: Procesar archivos de modulos
     Set objFolder = objFSO.GetFolder(g_ModulesSrcPath)
     
     For Each objFile In objFolder.Files
         If LCase(objFSO.GetExtensionName(objFile.Name)) = "bas" Or LCase(objFSO.GetExtensionName(objFile.Name)) = "cls" Then
             strModuleName = objFSO.GetBaseName(objFile.Name)
             
-            LogMessage "Procesando modulo: " & strModuleName
+            ' LogMessage "Procesando modulo: " & strModuleName
             
             ' Usar la función unificada de importación
             Dim importResult
             importResult = RebuildLike_ImportOne(objAccess, strModuleName)
             
             If Not importResult Then
-                LogMessage "Error al importar modulo " & strModuleName
+                ' LogMessage "Error al importar modulo " & strModuleName
             End If
         End If
     Next
     
-    ' PASO 4.3: Guardar cada modulo individualmente
-    LogMessage "Guardando modulos individualmente..."
+    ' PASO 3.3: Guardar cada modulo individualmente
+    ' LogMessage "Guardando modulos individualmente..."
     On Error Resume Next
     
     For Each vbComponent In objAccess.VBE.ActiveVBProject.VBComponents
         If vbComponent.Type = 1 Then  ' vbext_ct_StdModule
-            LogMessage "Guardando modulo: " & vbComponent.Name
+            ' LogMessage "Guardando modulo: " & vbComponent.Name
             objAccess.DoCmd.Save 5, vbComponent.Name  ' acModule = 5
             If Err.Number <> 0 Then
-                LogMessage "Advertencia al guardar " & vbComponent.Name & ": " & Err.Description
+                ' LogMessage "Advertencia al guardar " & vbComponent.Name & ": " & Err.Description
                 Err.Clear
             End If
         ElseIf vbComponent.Type = 2 Then  ' vbext_ct_ClassModule
-            LogMessage "Guardando clase: " & vbComponent.Name
+            ' LogMessage "Guardando clase: " & vbComponent.Name
             objAccess.DoCmd.Save 7, vbComponent.Name  ' acClassModule = 7
             If Err.Number <> 0 Then
-                LogMessage "Advertencia al guardar " & vbComponent.Name & ": " & Err.Description
+                ' LogMessage "Advertencia al guardar " & vbComponent.Name & ": " & Err.Description
                 Err.Clear
             End If
         End If
     Next
     
-    ' PASO 4.4: Verificacion de integridad y compilacion
-    LogMessage "Verificando integridad de nombres de modulos..."
+    ' PASO 3.4: Verificacion de integridad y compilacion
+    ' LogMessage "Verificando integridad de nombres de modulos..."
     Call VerifyModuleNames(objAccess, g_ModulesSrcPath)
     
-    LogMessage "=== RECONSTRUCCION COMPLETADA EXITOSAMENTE ==="
-    LogMessage "El proyecto VBA ha sido completamente reconstruido"
-    LogMessage "Todos los modulos han sido reimportados desde /src"
+    ' LogMessage "=== RECONSTRUCCION COMPLETADA EXITOSAMENTE ==="
+    ' LogMessage "El proyecto VBA ha sido completamente reconstruido"
+    ' LogMessage "Todos los modulos han sido reimportados desde /src"
     
     On Error GoTo 0
 End Sub
@@ -3088,7 +3071,7 @@ Sub ExportFormToJSON(dbPath, password, formName, outputPath)
     
     ' Abrir Access
     Dim objApp
-    Set objApp = OpenAccess(dbPath, password)
+    Set objApp = OpenAccessCanonical(dbPath, password)
     If objApp Is Nothing Then
         LogMessage "Error: No se pudo abrir la base de datos"
         Exit Sub
@@ -3100,7 +3083,7 @@ Sub ExportFormToJSON(dbPath, password, formName, outputPath)
     
     If jsonContent = "" Then
         LogMessage "Error: No se pudieron extraer los controles del formulario"
-        CloseAccess objApp
+        CloseAccessCanonical objApp
         Exit Sub
     End If
     
@@ -3113,7 +3096,7 @@ Sub ExportFormToJSON(dbPath, password, formName, outputPath)
     LogMessage "Formulario exportado exitosamente a: " & outputPath
     
     ' Cerrar Access
-    CloseAccess objApp
+    CloseAccessCanonical objApp
     
     On Error GoTo 0
 End Sub
@@ -3326,7 +3309,7 @@ Function ImportFormFromJson(dbPath, jsonPath, targetName)
     
     ' Abrir Access con configuración anti-UI
     Dim app
-    Set app = OpenAccess(dbPath, GetDatabasePassword(dbPath))
+    Set app = OpenAccessCanonical(dbPath, GetDatabasePassword(dbPath))
     If app Is Nothing Then Exit Function
     
     AntiUI app
@@ -3335,13 +3318,13 @@ Function ImportFormFromJson(dbPath, jsonPath, targetName)
     Dim jsonContent, root
     jsonContent = ReadAllText(jsonPath)
     If jsonContent = "" Then
-        CloseAccess app
+        CloseAccessCanonical app
         Exit Function
     End If
     
     Set root = JsonParse(jsonContent)
     If root Is Nothing Then
-        CloseAccess app
+        CloseAccessCanonical app
         Exit Function
     End If
     
@@ -3353,7 +3336,7 @@ Function ImportFormFromJson(dbPath, jsonPath, targetName)
     
     ' Crear formulario base
     If Not CreateFormFromJson(app, root, ImportFormFromJson_target) Then
-        CloseAccess app
+        CloseAccessCanonical app
         Exit Function
     End If
     
@@ -3524,7 +3507,7 @@ Function ImportFormFromJson_Finalize()
     Err.Clear
     
     ' Cerrar Access
-    CloseAccess app
+    CloseAccessCanonical app
     
     ' Limpiar referencias
     Set ImportFormFromJson_app = Nothing
@@ -3607,3 +3590,6 @@ End Function
 
 ' Ejecutar función principal
 Main()
+
+' Limpiar instancia singleton al final del script
+CloseSingletonAccess()
